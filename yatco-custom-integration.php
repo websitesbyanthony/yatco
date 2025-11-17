@@ -343,16 +343,14 @@ function yatco_import_page() {
         return;
     }
 
-    $criteria_price_min = isset( $_POST['price_min'] ) ? floatval( $_POST['price_min'] ) : '';
-    $criteria_price_max = isset( $_POST['price_max'] ) ? floatval( $_POST['price_max'] ) : '';
-    $criteria_year_min  = isset( $_POST['year_min'] ) ? intval( $_POST['year_min'] ) : '';
-    $criteria_year_max  = isset( $_POST['year_max'] ) ? intval( $_POST['year_max'] ) : '';
-    $criteria_loa_min   = isset( $_POST['loa_min'] ) ? floatval( $_POST['loa_min'] ) : '';
-    $criteria_loa_max   = isset( $_POST['loa_max'] ) ? floatval( $_POST['loa_max'] ) : '';
-    $max_records        = isset( $_POST['max_records'] ) ? intval( $_POST['max_records'] ) : 50;
-    if ( $max_records <= 0 ) {
-        $max_records = 50;
-    }
+    // Parse criteria - treat empty strings and 0 as "no filter"
+    $criteria_price_min = isset( $_POST['price_min'] ) && $_POST['price_min'] !== '' && $_POST['price_min'] !== '0' ? floatval( $_POST['price_min'] ) : '';
+    $criteria_price_max = isset( $_POST['price_max'] ) && $_POST['price_max'] !== '' && $_POST['price_max'] !== '0' ? floatval( $_POST['price_max'] ) : '';
+    $criteria_year_min  = isset( $_POST['year_min'] ) && $_POST['year_min'] !== '' && $_POST['year_min'] !== '0' ? intval( $_POST['year_min'] ) : '';
+    $criteria_year_max  = isset( $_POST['year_max'] ) && $_POST['year_max'] !== '' && $_POST['year_max'] !== '0' ? intval( $_POST['year_max'] ) : '';
+    $criteria_loa_min   = isset( $_POST['loa_min'] ) && $_POST['loa_min'] !== '' && $_POST['loa_min'] !== '0' ? floatval( $_POST['loa_min'] ) : '';
+    $criteria_loa_max   = isset( $_POST['loa_max'] ) && $_POST['loa_max'] !== '' && $_POST['loa_max'] !== '0' ? floatval( $_POST['loa_max'] ) : '';
+    $max_records        = isset( $_POST['max_records'] ) && $_POST['max_records'] !== '' && $_POST['max_records'] > 0 ? intval( $_POST['max_records'] ) : 50;
 
     $preview_results = array();
     $message         = '';
@@ -399,29 +397,43 @@ function yatco_import_page() {
                 $loa_raw = $brief['LOA'];
                 if ( is_string( $loa_raw ) && preg_match( '/([0-9.]+)/', $loa_raw, $matches ) ) {
                     $loa = floatval( $matches[1] );
-                } elseif ( ! empty( $loa_raw ) ) {
+                } elseif ( ! empty( $loa_raw ) && is_numeric( $loa_raw ) ) {
                     $loa = floatval( $loa_raw );
                 } else {
                     $loa = null;
                 }
 
-                if ( $criteria_price_min !== '' && ( is_null( $price ) || $price <= 0 || $price < $criteria_price_min ) ) {
-                    continue;
+                // Apply filters only if criteria are set (not empty string).
+                // Skip vessels with null/0 values only if a filter is set.
+                if ( $criteria_price_min !== '' ) {
+                    if ( is_null( $price ) || $price <= 0 || $price < $criteria_price_min ) {
+                        continue;
+                    }
                 }
-                if ( $criteria_price_max !== '' && ( is_null( $price ) || $price <= 0 || $price > $criteria_price_max ) ) {
-                    continue;
+                if ( $criteria_price_max !== '' ) {
+                    if ( is_null( $price ) || $price <= 0 || $price > $criteria_price_max ) {
+                        continue;
+                    }
                 }
-                if ( $criteria_year_min !== '' && ( is_null( $year ) || $year <= 0 || $year < $criteria_year_min ) ) {
-                    continue;
+                if ( $criteria_year_min !== '' ) {
+                    if ( is_null( $year ) || $year <= 0 || $year < $criteria_year_min ) {
+                        continue;
+                    }
                 }
-                if ( $criteria_year_max !== '' && ( is_null( $year ) || $year <= 0 || $year > $criteria_year_max ) ) {
-                    continue;
+                if ( $criteria_year_max !== '' ) {
+                    if ( is_null( $year ) || $year <= 0 || $year > $criteria_year_max ) {
+                        continue;
+                    }
                 }
-                if ( $criteria_loa_min !== '' && ( is_null( $loa ) || $loa <= 0 || $loa < $criteria_loa_min ) ) {
-                    continue;
+                if ( $criteria_loa_min !== '' ) {
+                    if ( is_null( $loa ) || $loa <= 0 || $loa < $criteria_loa_min ) {
+                        continue;
+                    }
                 }
-                if ( $criteria_loa_max !== '' && ( is_null( $loa ) || $loa <= 0 || $loa > $criteria_loa_max ) ) {
-                    continue;
+                if ( $criteria_loa_max !== '' ) {
+                    if ( is_null( $loa ) || $loa <= 0 || $loa > $criteria_loa_max ) {
+                        continue;
+                    }
                 }
 
                 $preview_results[] = $brief;
@@ -441,22 +453,22 @@ function yatco_import_page() {
             <tr>
                 <th scope="row">Price (USD)</th>
                 <td>
-                    Min: <input type="number" step="1" name="price_min" value="<?php echo esc_attr( $criteria_price_min ); ?>" />
-                    Max: <input type="number" step="1" name="price_max" value="<?php echo esc_attr( $criteria_price_max ); ?>" />
+                    Min: <input type="number" step="1" name="price_min" value="<?php echo $criteria_price_min !== '' ? esc_attr( $criteria_price_min ) : ''; ?>" />
+                    Max: <input type="number" step="1" name="price_max" value="<?php echo $criteria_price_max !== '' ? esc_attr( $criteria_price_max ) : ''; ?>" />
                 </td>
             </tr>
             <tr>
                 <th scope="row">Length (LOA)</th>
                 <td>
-                    Min: <input type="number" step="0.1" name="loa_min" value="<?php echo esc_attr( $criteria_loa_min ); ?>" />
-                    Max: <input type="number" step="0.1" name="loa_max" value="<?php echo esc_attr( $criteria_loa_max ); ?>" />
+                    Min: <input type="number" step="0.1" name="loa_min" value="<?php echo $criteria_loa_min !== '' ? esc_attr( $criteria_loa_min ) : ''; ?>" />
+                    Max: <input type="number" step="0.1" name="loa_max" value="<?php echo $criteria_loa_max !== '' ? esc_attr( $criteria_loa_max ) : ''; ?>" />
                 </td>
             </tr>
             <tr>
                 <th scope="row">Year Built</th>
                 <td>
-                    Min: <input type="number" step="1" name="year_min" value="<?php echo esc_attr( $criteria_year_min ); ?>" />
-                    Max: <input type="number" step="1" name="year_max" value="<?php echo esc_attr( $criteria_year_max ); ?>" />
+                    Min: <input type="number" step="1" name="year_min" value="<?php echo $criteria_year_min !== '' ? esc_attr( $criteria_year_min ) : ''; ?>" />
+                    Max: <input type="number" step="1" name="year_max" value="<?php echo $criteria_year_max !== '' ? esc_attr( $criteria_year_max ) : ''; ?>" />
                 </td>
             </tr>
             <tr>
