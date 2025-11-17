@@ -1,551 +1,692 @@
 <?php
-/*
-Plugin Name: YATCO Custom Integration (Rebuilt)
-Description: Imports YATCO vessels into WordPress and maps core fields.
-Version: 1.0.0
-Author: ChatGPT
-*/
+
+/**
+ * Plugin Name: YATCO Custom Integration
+ * Description: Fetch selected YATCO vessels into a Yacht custom post type.
+ * Version: 3.1
+ * Author: Your Name
+ * License: GPL-2.0+
+ */
 
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-class YATCO_Custom_Integration_Rebuilt {
-
-    const OPTION_TOKEN = 'yatco_api_token_basic';
-    const LOG_FILE     = 'yatco-api.log';
-    const API_BASE     = 'https://api.yatcoboss.com/api/v1/';
-
-    public function __construct() {
-        add_action( 'admin_menu', array( $this, 'register_admin_menu' ) );
-        add_action( 'admin_init', array( $this, 'register_settings' ) );
-        add_action( 'admin_post_yatco_test_connection', array( $this, 'handle_test_connection' ) );
-        add_action( 'admin_post_yatco_preview_listings', array( $this, 'handle_preview_listings' ) );
-        add_action( 'admin_post_yatco_import_selected', array( $this, 'handle_import_selected' ) );
-    }
-
-    public static function log( $message, $context = array() ) {
-        if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-            $upload_dir = wp_upload_dir();
-            $log_dir    = trailingslashit( $upload_dir['basedir'] ) . 'yatco-logs';
-            if ( ! file_exists( $log_dir ) ) {
-                wp_mkdir_p( $log_dir );
-            }
-            $file = trailingslashit( $log_dir ) . self::LOG_FILE;
-            $timestamp = date( 'Y-m-d H:i:s' );
-            $line = '[' . $timestamp . '] ' . $message;
-            if ( ! empty( $context ) ) {
-                $line .= ' ' . wp_json_encode( $context );
-            }
-            $line .= PHP_EOL;
-            @file_put_contents( $file, $line, FILE_APPEND );
-        }
-    }
-
-    public function register_admin_menu() {
-        add_options_page(
-            'YATCO API Settings',
-            'YATCO API',
-            'manage_options',
-            'yatco-api-settings',
-            array( $this, 'render_settings_page' )
-        );
-
-        add_menu_page(
-            'YATCO Import',
-            'YATCO Import',
-            'manage_options',
-            'yatco-import',
-            array( $this, 'render_import_page' ),
-            'dashicons-download',
-            58
-        );
-    }
-
-    public function register_settings() {
-        register_setting( 'yatco_api_settings_group', self::OPTION_TOKEN );
-
-        add_settings_section(
-            'yatco_api_main_section',
-            'YATCO API Credentials',
-            '__return_false',
-            'yatco-api-settings'
-        );
-
-        add_settings_field(
-            self::OPTION_TOKEN,
-            'API Token (Basic)',
-            array( $this, 'render_token_field' ),
-            'yatco-api-settings',
-            'yatco_api_main_section'
-        );
-    }
-
-    public function render_token_field() {
-        $token = esc_attr( get_option( self::OPTION_TOKEN, '' ) );
-        echo '<input type="text" class="regular-text" name="' . esc_attr( self::OPTION_TOKEN ) . '" value="' . $token . '" />';
-        echo '<p class="description">Paste the Basic token exactly as provided by YATCO (do not re-encode).</p>';
-    }
-
-    public function render_settings_page() {
-        ?>
-        <div class="wrap">
-            <h1>YATCO API Settings</h1>
-            <?php if ( isset( $_GET['yatco_test'] ) ) : ?>
-                <div class="notice notice-success"><p><?php echo esc_html( wp_unslash( $_GET['yatco_test'] ) ); ?></p></div>
-            <?php endif; ?>
-            <form method="post" action="options.php">
-                <?php
-                settings_fields( 'yatco_api_settings_group' );
-                do_settings_sections( 'yatco-api-settings' );
-                submit_button( 'Save Changes' );
-                ?>
-            </form>
-
-            <hr />
-
-            <h2>Test API Connection</h2>
-            <p>This test calls the <code>ForSale/Vessel/Active</code> endpoint to confirm your token is valid.</p>
-            <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
-                <?php wp_nonce_field( 'yatco_test_connection', 'yatco_test_nonce' ); ?>
-                <input type="hidden" name="action" value="yatco_test_connection" />
-                <?php submit_button( 'Test Connection', 'secondary' ); ?>
-            </form>
-        </div>
-        <?php
-    }
-
-    protected function get_token() {
-        $token = get_option( self::OPTION_TOKEN, '' );
-        return trim( $token );
-    }
-
-    protected function api_get( $path, $args = array() ) {
-        $token = $this->get_token();
-        if ( empty( $token ) ) {
-            return new WP_Error( 'yatco_no_token', 'YATCO API token is not set.' );
-        }
-
-        $url = trailingslashit( self::API_BASE ) . ltrim( $path, '/' );
-        if ( ! empty( $args ) ) {
-            $url = add_query_arg( $args, $url );
-        }
-
-        $headers = array(
-            'Authorization' => 'Basic ' . $token,
-            'Accept'        => 'application/json',
-        );
-
-        self::log( 'GET ' . $url );
-
-        $response = wp_remote_get( $url, array(
-            'headers' => $headers,
-            'timeout' => 30,
-        ) );
-
-        if ( is_wp_error( $response ) ) {
-            self::log( 'API error', array( 'error' => $response->get_error_message() ) );
-            return $response;
-        }
-
-        $code = wp_remote_retrieve_response_code( $response );
-        $body = wp_remote_retrieve_body( $response );
-
-        self::log( 'API response', array( 'code' => $code, 'body_snippet' => substr( $body, 0, 300 ) ) );
-
-        if ( $code < 200 || $code >= 300 ) {
-            return new WP_Error( 'yatco_http_error', 'Unexpected HTTP status: ' . $code, array( 'body' => $body ) );
-        }
-
-        $data = json_decode( $body, true );
-        if ( null === $data && json_last_error() !== JSON_ERROR_NONE ) {
-            return new WP_Error( 'yatco_json_error', 'JSON decode error: ' . json_last_error_msg() );
-        }
-
-        return $data;
-    }
-
-    public function handle_test_connection() {
-        if ( ! current_user_can( 'manage_options' ) ) {
-            wp_die( 'Unauthorized' );
-        }
-        check_admin_referer( 'yatco_test_connection', 'yatco_test_nonce' );
-
-        $result = $this->api_get( 'ForSale/Vessel/Active' );
-        $msg    = '';
-
-        if ( is_wp_error( $result ) ) {
-            $msg = 'Error: ' . $result->get_error_message();
-        } else {
-            if ( is_array( $result ) ) {
-                $count = isset( $result['Result'] ) && is_array( $result['Result'] ) ? count( $result['Result'] ) : count( $result );
-                $msg   = 'Success! API responded with ' . $count . ' active vessel IDs.';
-            } else {
-                $msg = 'Success! API responded.';
-            }
-        }
-
-        $url = add_query_arg(
-            array(
-                'page'       => 'yatco-api-settings',
-                'yatco_test' => rawurlencode( $msg ),
+/**
+ * Register Yacht CPT on activation.
+ */
+function yatco_create_cpt() {
+    register_post_type(
+        'yacht',
+        array(
+            'labels'       => array(
+                'name'          => 'Yachts',
+                'singular_name' => 'Yacht',
             ),
-            admin_url( 'options-general.php' )
-        );
+            'public'       => true,
+            'has_archive'  => true,
+            'rewrite'      => array( 'slug' => 'yachts' ),
+            'supports'     => array( 'title', 'editor', 'thumbnail', 'custom-fields' ),
+            'show_in_rest' => true,
+        )
+    );
+    flush_rewrite_rules();
+}
+register_activation_hook( __FILE__, 'yatco_create_cpt' );
 
-        wp_safe_redirect( $url );
-        exit;
-    }
+/**
+ * Admin settings page.
+ */
+add_action( 'admin_menu', 'yatco_add_admin_menu' );
+add_action( 'admin_init', 'yatco_settings_init' );
 
-    public function render_import_page() {
-        if ( ! current_user_can( 'manage_options' ) ) {
-            wp_die( 'Unauthorized' );
-        }
+function yatco_add_admin_menu() {
+    add_options_page(
+        'YATCO API Settings',
+        'YATCO API',
+        'manage_options',
+        'yatco_api',
+        'yatco_options_page'
+    );
 
-        $price_min  = isset( $_POST['price_min'] ) ? floatval( wp_unslash( $_POST['price_min'] ) ) : '';
-        $price_max  = isset( $_POST['price_max'] ) ? floatval( wp_unslash( $_POST['price_max'] ) ) : '';
-        $loa_min    = isset( $_POST['loa_min'] ) ? floatval( wp_unslash( $_POST['loa_min'] ) ) : '';
-        $loa_max    = isset( $_POST['loa_max'] ) ? floatval( wp_unslash( $_POST['loa_max'] ) ) : '';
-        $year_min   = isset( $_POST['year_min'] ) ? intval( wp_unslash( $_POST['year_min'] ) ) : '';
-        $year_max   = isset( $_POST['year_max'] ) ? intval( wp_unslash( $_POST['year_max'] ) ) : '';
-        $max_records = isset( $_POST['max_records'] ) ? intval( wp_unslash( $_POST['max_records'] ) ) : 50;
-
-        if ( $max_records <= 0 ) {
-            $max_records = 50;
-        }
-
-        $preview_rows = array();
-        if ( isset( $_GET['preview'] ) && isset( $_POST['yatco_import_nonce'] ) && wp_verify_nonce( wp_unslash( $_POST['yatco_import_nonce'] ), 'yatco_import' ) ) {
-            $preview_rows = $this->get_preview_rows( $max_records, $price_min, $price_max, $loa_min, $loa_max, $year_min, $year_max );
-        }
-
-        ?>
-        <div class="wrap">
-            <h1>YATCO Import</h1>
-
-            <?php if ( isset( $_GET['yatco_msg'] ) ) : ?>
-                <div class="notice notice-info"><p><?php echo esc_html( wp_unslash( $_GET['yatco_msg'] ) ); ?></p></div>
-            <?php endif; ?>
-
-            <form method="post" action="<?php echo esc_url( add_query_arg( 'page', 'yatco-import', admin_url( 'admin.php' ) ) ); ?>">
-                <?php wp_nonce_field( 'yatco_import', 'yatco_import_nonce' ); ?>
-                <input type="hidden" name="action" value="yatco_preview_listings" />
-                <h2>Import Criteria</h2>
-                <table class="form-table">
-                    <tr>
-                        <th scope="row">Price (USD)</th>
-                        <td>
-                            Min: <input type="number" step="1" name="price_min" value="<?php echo esc_attr( $price_min ); ?>" />
-                            Max: <input type="number" step="1" name="price_max" value="<?php echo esc_attr( $price_max ); ?>" />
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row">Length (LOA, feet)</th>
-                        <td>
-                            Min: <input type="number" step="0.1" name="loa_min" value="<?php echo esc_attr( $loa_min ); ?>" />
-                            Max: <input type="number" step="0.1" name="loa_max" value="<?php echo esc_attr( $loa_max ); ?>" />
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row">Year Built</th>
-                        <td>
-                            Min: <input type="number" step="1" name="year_min" value="<?php echo esc_attr( $year_min ); ?>" />
-                            Max: <input type="number" step="1" name="year_max" value="<?php echo esc_attr( $year_max ); ?>" />
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row">Max Records</th>
-                        <td>
-                            <input type="number" step="1" name="max_records" value="<?php echo esc_attr( $max_records ); ?>" />
-                            <span class="description">Maximum number of active vessels to fetch from YATCO before filtering (default 50).</span>
-                        </td>
-                    </tr>
-                </table>
-                <?php submit_button( 'Preview Listings', 'primary', 'preview_listings' ); ?>
-            </form>
-
-            <?php if ( ! empty( $preview_rows ) ) : ?>
-                <h2>Preview Results</h2>
-                <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
-                    <?php wp_nonce_field( 'yatco_import', 'yatco_import_nonce' ); ?>
-                    <input type="hidden" name="action" value="yatco_import_selected" />
-                    <table class="widefat fixed striped">
-                        <thead>
-                            <tr>
-                                <th class="check-column"><input type="checkbox" onclick="jQuery('.yatco-vessel-checkbox').prop('checked', this.checked);" /></th>
-                                <th>Vessel ID</th>
-                                <th>MLS ID</th>
-                                <th>Name</th>
-                                <th>Price (USD)</th>
-                                <th>Year</th>
-                                <th>LOA</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ( $preview_rows as $row ) : ?>
-                                <tr>
-                                    <th class="check-column">
-                                        <input class="yatco-vessel-checkbox" type="checkbox" name="vessel_ids[]" value="<?php echo esc_attr( $row['vessel_id'] ); ?>" />
-                                    </th>
-                                    <td><?php echo esc_html( $row['vessel_id'] ); ?></td>
-                                    <td><?php echo esc_html( $row['mls_id'] ); ?></td>
-                                    <td><?php echo esc_html( $row['name'] ); ?></td>
-                                    <td><?php echo esc_html( $row['price_usd'] ); ?></td>
-                                    <td><?php echo esc_html( $row['year'] ); ?></td>
-                                    <td><?php echo esc_html( $row['loa_text'] ); ?></td>
-                                </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                    <?php submit_button( 'Import Selected', 'primary', 'import_selected' ); ?>
-                </form>
-            <?php endif; ?>
-        </div>
-        <?php
-    }
-
-    public function handle_preview_listings() {
-        if ( ! current_user_can( 'manage_options' ) ) {
-            wp_die( 'Unauthorized' );
-        }
-        check_admin_referer( 'yatco_import', 'yatco_import_nonce' );
-
-        // We simply re-render the import page; criteria will be read from POST.
-        $url = add_query_arg(
-            array(
-                'page'    => 'yatco-import',
-                'preview' => 1,
-            ),
-            admin_url( 'admin.php' )
-        );
-        wp_safe_redirect( $url );
-        exit;
-    }
-
-    protected function get_preview_rows( $max_records, $price_min, $price_max, $loa_min, $loa_max, $year_min, $year_max ) {
-        $rows = array();
-
-        $data = $this->api_get( 'ForSale/Vessel/Active' );
-        if ( is_wp_error( $data ) ) {
-            self::log( 'Failed to fetch active vessels', array( 'error' => $data->get_error_message() ) );
-            return $rows;
-        }
-
-        $ids = array();
-        if ( isset( $data['Result'] ) && is_array( $data['Result'] ) ) {
-            $ids = $data['Result'];
-        } elseif ( is_array( $data ) ) {
-            $ids = $data;
-        }
-
-        $ids = array_slice( $ids, 0, $max_records );
-
-        foreach ( $ids as $id ) {
-            $id = intval( $id );
-            if ( $id <= 0 ) {
-                continue;
-            }
-
-            $details = $this->api_get( 'ForSale/Vessel/' . $id . '/Details/FullSpecsAll' );
-            if ( is_wp_error( $details ) ) {
-                self::log( 'Failed to fetch FullSpecsAll', array( 'vessel_id' => $id, 'error' => $details->get_error_message() ) );
-                continue;
-            }
-
-            $mapped = $this->map_vessel_data( $details );
-            if ( ! $this->passes_filters( $mapped, $price_min, $price_max, $loa_min, $loa_max, $year_min, $year_max ) ) {
-                continue;
-            }
-
-            $rows[] = $mapped;
-        }
-
-        return $rows;
-    }
-
-    protected function map_vessel_data( $details ) {
-        $result   = isset( $details['Result'] ) ? $details['Result'] : array();
-        $basic    = isset( $details['BasicInfo'] ) ? $details['BasicInfo'] : array();
-        $dims     = isset( $details['Dimensions'] ) ? $details['Dimensions'] : array();
-
-        $vessel_id = isset( $result['VesselID'] ) ? intval( $result['VesselID'] ) : ( isset( $basic['VesselID'] ) ? intval( $basic['VesselID'] ) : 0 );
-        $mls_id    = isset( $result['MLSID'] ) ? $result['MLSID'] : ( isset( $basic['MLSID'] ) ? $basic['MLSID'] : '' );
-
-        $name = '';
-        if ( ! empty( $result['VesselName'] ) ) {
-            $name = $result['VesselName'];
-        } elseif ( ! empty( $basic['BoatName'] ) ) {
-            $name = $basic['BoatName'];
-        } elseif ( ! empty( $basic['Model'] ) ) {
-            $name = $basic['Model'];
-        } else {
-            $name = 'Unnamed Yacht';
-        }
-
-        $price_usd = 0;
-        if ( isset( $basic['AskingPriceUSD'] ) ) {
-            $price_usd = floatval( $basic['AskingPriceUSD'] );
-        } elseif ( isset( $result['AskingPriceCompare'] ) ) {
-            $price_usd = floatval( $result['AskingPriceCompare'] );
-        } elseif ( isset( $result['AskingPrice'] ) && isset( $result['AskingPriceCurrencyText'] ) && $result['AskingPriceCurrencyText'] === 'USD' ) {
-            $price_usd = floatval( $result['AskingPrice'] );
-        }
-
-        $year = 0;
-        if ( isset( $result['ModelYear'] ) && $result['ModelYear'] > 0 ) {
-            $year = intval( $result['ModelYear'] );
-        } elseif ( isset( $result['YearBuilt'] ) && $result['YearBuilt'] > 0 ) {
-            $year = intval( $result['YearBuilt'] );
-        } elseif ( isset( $basic['ModelYear'] ) && $basic['ModelYear'] > 0 ) {
-            $year = intval( $basic['ModelYear'] );
-        } elseif ( isset( $basic['YearBuilt'] ) && $basic['YearBuilt'] > 0 ) {
-            $year = intval( $basic['YearBuilt'] );
-        }
-
-        $loa_text = '';
-        $loa_feet = 0.0;
-
-        if ( ! empty( $dims['LOAFeet'] ) ) {
-            $loa_text = $dims['LOAFeet'];
-            if ( preg_match( '/([0-9.]+)/', $dims['LOAFeet'], $m ) ) {
-                $loa_feet = floatval( $m[1] );
-            }
-        } elseif ( ! empty( $dims['LOA'] ) ) {
-            $loa_text = $dims['LOA'];
-            if ( preg_match( '/([0-9.]+)/', $dims['LOA'], $m ) ) {
-                $loa_feet = floatval( $m[1] );
-            }
-        } elseif ( isset( $result['LOAFeet'] ) ) {
-            $loa_feet = floatval( $result['LOAFeet'] );
-            $loa_text = $loa_feet . ' ft';
-        } elseif ( isset( $dims['Length'] ) ) {
-            $len = floatval( $dims['Length'] );
-            $unit = isset( $dims['LengthUnit'] ) ? intval( $dims['LengthUnit'] ) : 0;
-            if ( $unit === 2 ) { // meters
-                $loa_feet = $len * 3.28084;
-            } else {
-                $loa_feet = $len;
-            }
-            $loa_text = sprintf( '%.1f ft', $loa_feet );
-        }
-
-        return array(
-            'vessel_id' => $vessel_id,
-            'mls_id'    => $mls_id,
-            'name'      => $name,
-            'price_usd' => $price_usd,
-            'year'      => $year,
-            'loa_feet'  => $loa_feet,
-            'loa_text'  => $loa_text,
-        );
-    }
-
-    protected function passes_filters( $mapped, $price_min, $price_max, $loa_min, $loa_max, $year_min, $year_max ) {
-        $price = floatval( $mapped['price_usd'] );
-        $loa   = floatval( $mapped['loa_feet'] );
-        $year  = intval( $mapped['year'] );
-
-        if ( $price_min !== '' && $price > 0 && $price < $price_min ) {
-            return false;
-        }
-        if ( $price_max !== '' && $price > 0 && $price > $price_max ) {
-            return false;
-        }
-        if ( $loa_min !== '' && $loa > 0 && $loa < $loa_min ) {
-            return false;
-        }
-        if ( $loa_max !== '' && $loa > 0 && $loa > $loa_max ) {
-            return false;
-        }
-        if ( $year_min !== '' && $year > 0 && $year < $year_min ) {
-            return false;
-        }
-        if ( $year_max !== '' && $year > 0 && $year > $year_max ) {
-            return false;
-        }
-
-        return true;
-    }
-
-    public function handle_import_selected() {
-        if ( ! current_user_can( 'manage_options' ) ) {
-            wp_die( 'Unauthorized' );
-        }
-        check_admin_referer( 'yatco_import', 'yatco_import_nonce' );
-
-        $ids = isset( $_POST['vessel_ids'] ) ? (array) $_POST['vessel_ids'] : array();
-        $ids = array_map( 'intval', $ids );
-        $ids = array_filter( $ids );
-
-        if ( empty( $ids ) ) {
-            $url = add_query_arg(
-                array(
-                    'page'      => 'yatco-import',
-                    'yatco_msg' => rawurlencode( 'No vessels selected for import.' ),
-                ),
-                admin_url( 'admin.php' )
-            );
-            wp_safe_redirect( $url );
-            exit;
-        }
-
-        $imported = 0;
-
-        foreach ( $ids as $id ) {
-            $details = $this->api_get( 'ForSale/Vessel/' . $id . '/Details/FullSpecsAll' );
-            if ( is_wp_error( $details ) ) {
-                self::log( 'Failed to fetch FullSpecsAll during import', array( 'vessel_id' => $id, 'error' => $details->get_error_message() ) );
-                continue;
-            }
-
-            $mapped = $this->map_vessel_data( $details );
-
-            $post_id = wp_insert_post( array(
-                'post_type'   => 'post',
-                'post_status' => 'publish',
-                'post_title'  => $mapped['name'],
-                'post_content'=> $this->extract_description_from_details( $details ),
-            ), true );
-
-            if ( is_wp_error( $post_id ) ) {
-                self::log( 'Failed to create post', array( 'vessel_id' => $id, 'error' => $post_id->get_error_message() ) );
-                continue;
-            }
-
-            update_post_meta( $post_id, 'yatco_vessel_id', $mapped['vessel_id'] );
-            update_post_meta( $post_id, 'yatco_mls_id', $mapped['mls_id'] );
-            update_post_meta( $post_id, 'yatco_price_usd', $mapped['price_usd'] );
-            update_post_meta( $post_id, 'yatco_year', $mapped['year'] );
-            update_post_meta( $post_id, 'yatco_loa_feet', $mapped['loa_feet'] );
-            update_post_meta( $post_id, 'yatco_loa_text', $mapped['loa_text'] );
-
-            $imported++;
-        }
-
-        $msg = sprintf( 'Imported %d vessel(s).', $imported );
-        $url = add_query_arg(
-            array(
-                'page'      => 'yatco-import',
-                'yatco_msg' => rawurlencode( $msg ),
-            ),
-            admin_url( 'admin.php' )
-        );
-        wp_safe_redirect( $url );
-        exit;
-    }
-
-    protected function extract_description_from_details( $details ) {
-        if ( isset( $details['VD']['VesselDescriptionShortDescriptionNoStyles'] ) && ! empty( $details['VD']['VesselDescriptionShortDescriptionNoStyles'] ) ) {
-            return $details['VD']['VesselDescriptionShortDescriptionNoStyles'];
-        }
-        if ( isset( $details['MiscInfo']['VesselDescriptionShortDescription'] ) && ! empty( $details['MiscInfo']['VesselDescriptionShortDescription'] ) ) {
-            return $details['MiscInfo']['VesselDescriptionShortDescription'];
-        }
-        if ( isset( $details['VD']['VesselDescriptionShortDescription'] ) && ! empty( $details['VD']['VesselDescriptionShortDescription'] ) ) {
-            return $details['VD']['VesselDescriptionShortDescription'];
-        }
-        return '';
-    }
+    // Import page under Yachts.
+    add_submenu_page(
+        'edit.php?post_type=yacht',
+        'YATCO Import',
+        'YATCO Import',
+        'manage_options',
+        'yatco_import',
+        'yatco_import_page'
+    );
 }
 
-new YATCO_Custom_Integration_Rebuilt();
+function yatco_settings_init() {
+    register_setting( 'yatco_api', 'yatco_api_settings' );
+
+    add_settings_section(
+        'yatco_api_section',
+        'YATCO API Credentials',
+        'yatco_settings_section_callback',
+        'yatco_api'
+    );
+
+    add_settings_field(
+        'yatco_api_token',
+        'API Token (Basic)',
+        'yatco_api_token_render',
+        'yatco_api',
+        'yatco_api_section'
+    );
+}
+
+function yatco_settings_section_callback() {
+    echo '<p>Enter your YATCO API Basic token. This will be used for search and import.</p>';
+}
+
+function yatco_api_token_render() {
+    $options = get_option( 'yatco_api_settings' );
+    $token   = isset( $options['yatco_api_token'] ) ? $options['yatco_api_token'] : '';
+    echo '<input type="text" name="yatco_api_settings[yatco_api_token]" value="' . esc_attr( $token ) . '" size="80" />';
+    echo '<p class="description">Paste the Basic token exactly as provided by YATCO (do not re-encode).</p>';
+}
+
+/**
+ * Settings page output.
+ */
+function yatco_options_page() {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        return;
+    }
+
+    $options = get_option( 'yatco_api_settings' );
+    $token   = isset( $options['yatco_api_token'] ) ? $options['yatco_api_token'] : '';
+
+    echo '<div class="wrap">';
+    echo '<h1>YATCO API Settings</h1>';
+    echo '<form method="post" action="options.php">';
+    settings_fields( 'yatco_api' );
+    do_settings_sections( 'yatco_api' );
+    submit_button();
+    echo '</form>';
+
+    echo '<hr />';
+    echo '<h2>Test API Connection</h2>';
+    echo '<p>This test calls the <code>/ForSale/vessel/activevesselmlsid</code> endpoint using your Basic token.</p>';
+    echo '<form method="post">';
+    submit_button( 'Test Connection', 'secondary', 'yatco_test_connection' );
+    echo '</form>';
+
+    if ( isset( $_POST['yatco_test_connection'] ) && check_admin_referer( 'yatco_api-options' ) ) {
+        if ( empty( $token ) ) {
+            echo '<div class="notice notice-error"><p>Missing token.</p></div>';
+        } else {
+            $result = yatco_test_connection( $token );
+            echo $result;
+        }
+    }
+
+    echo '</div>';
+}
+
+/**
+ * Connection test helper.
+ */
+function yatco_test_connection( $token ) {
+    $endpoint = 'https://api.yatcoboss.com/api/v1/ForSale/vessel/activevesselmlsid';
+
+    $response = wp_remote_get(
+        $endpoint,
+        array(
+            'headers' => array(
+                'Authorization' => 'Basic ' . $token,
+                'Accept'        => 'application/json',
+            ),
+            'timeout' => 20,
+        )
+    );
+
+    if ( is_wp_error( $response ) ) {
+        return '<div class="notice notice-error"><p>Error: ' . esc_html( $response->get_error_message() ) . '</p></div>';
+    }
+
+    $code = wp_remote_retrieve_response_code( $response );
+    $body = wp_remote_retrieve_body( $response );
+
+    if ( 200 !== $code ) {
+        return '<div class="notice notice-error"><p>Failed: HTTP ' . intval( $code ) . '</p><pre>' . esc_html( substr( $body, 0, 400 ) ) . '</pre></div>';
+    }
+
+    $data = json_decode( $body, true );
+    if ( ! is_array( $data ) ) {
+        return '<div class="notice notice-warning"><p>200 OK but response is not an array. Raw snippet:</p><pre>' . esc_html( substr( $body, 0, 400 ) ) . '</pre></div>';
+    }
+
+    $snippet = array_slice( $data, 0, 50 );
+    return '<div class="notice notice-success"><p><strong>Success!</strong> 200 OK</p><p>Sample MLSIDs:</p><pre>' . esc_html( print_r( $snippet, true ) ) . '</pre></div>';
+}
+
+/**
+ * Helper: get Basic token.
+ */
+function yatco_get_token() {
+    $options = get_option( 'yatco_api_settings' );
+    return isset( $options['yatco_api_token'] ) ? trim( $options['yatco_api_token'] ) : '';
+}
+
+/**
+ * Helper: fetch active vessel IDs using activevesselmlsid.
+ */
+function yatco_get_active_vessel_ids( $token, $max_records = 50 ) {
+    $endpoint = 'https://api.yatcoboss.com/api/v1/ForSale/vessel/activevesselmlsid';
+
+    $response = wp_remote_get(
+        $endpoint,
+        array(
+            'headers' => array(
+                'Authorization' => 'Basic ' . $token,
+                'Accept'        => 'application/json',
+            ),
+            'timeout' => 30,
+        )
+    );
+
+    if ( is_wp_error( $response ) ) {
+        return $response;
+    }
+
+    if ( 200 !== wp_remote_retrieve_response_code( $response ) ) {
+        return new WP_Error( 'yatco_http_error', 'HTTP ' . wp_remote_retrieve_response_code( $response ) );
+    }
+
+    $body = wp_remote_retrieve_body( $response );
+    $data = json_decode( $body, true );
+
+    if ( ! is_array( $data ) ) {
+        return new WP_Error( 'yatco_parse_error', 'Could not parse activevesselmlsid response.' );
+    }
+
+    $ids = array();
+    foreach ( $data as $id ) {
+        if ( is_numeric( $id ) ) {
+            $ids[] = (int) $id;
+        }
+    }
+
+    if ( $max_records > 0 && count( $ids ) > $max_records ) {
+        $ids = array_slice( $ids, 0, $max_records );
+    }
+
+    return $ids;
+}
+
+/**
+ * Helper: fetch FullSpecsAll for a vessel.
+ */
+function yatco_fetch_fullspecs( $token, $vessel_id ) {
+    $endpoint = 'https://api.yatcoboss.com/api/v1/ForSale/Vessel/' . intval( $vessel_id ) . '/Details/FullSpecsAll';
+
+    $response = wp_remote_get(
+        $endpoint,
+        array(
+            'headers' => array(
+                'Authorization' => 'Basic ' . $token,
+                'Accept'        => 'application/json',
+            ),
+            'timeout' => 30,
+        )
+    );
+
+    if ( is_wp_error( $response ) ) {
+        return $response;
+    }
+
+    if ( 200 !== wp_remote_retrieve_response_code( $response ) ) {
+        return new WP_Error( 'yatco_http_error', 'HTTP ' . wp_remote_retrieve_response_code( $response ) );
+    }
+
+    $body = wp_remote_retrieve_body( $response );
+    $data = json_decode( $body, true );
+
+    if ( null === $data ) {
+        return new WP_Error( 'yatco_parse_error', 'Could not parse FullSpecsAll JSON.' );
+    }
+
+    return $data;
+}
+
+/**
+ * Helper: parse a brief summary from FullSpecsAll for preview table.
+ * Updated to match actual API response structure.
+ */
+function yatco_build_brief_from_fullspecs( $vessel_id, $full ) {
+    $name   = '';
+    $price  = '';
+    $year   = '';
+    $loa    = '';
+    $mlsid  = '';
+
+    // Get Result and BasicInfo for easier access.
+    $result = isset( $full['Result'] ) ? $full['Result'] : array();
+    $basic  = isset( $full['BasicInfo'] ) ? $full['BasicInfo'] : array();
+    $dims   = isset( $full['Dimensions'] ) ? $full['Dimensions'] : array();
+
+    // Vessel name: Check Result.VesselName, then BasicInfo.BoatName.
+    if ( ! empty( $result['VesselName'] ) ) {
+        $name = $result['VesselName'];
+    } elseif ( ! empty( $basic['BoatName'] ) ) {
+        $name = $basic['BoatName'];
+    }
+
+    // Price: Prefer USD price from BasicInfo, fallback to Result.AskingPriceCompare.
+    if ( isset( $basic['AskingPriceUSD'] ) && $basic['AskingPriceUSD'] > 0 ) {
+        $price = $basic['AskingPriceUSD'];
+    } elseif ( isset( $result['AskingPriceCompare'] ) && $result['AskingPriceCompare'] > 0 ) {
+        $price = $result['AskingPriceCompare'];
+    } elseif ( isset( $basic['AskingPrice'] ) && $basic['AskingPrice'] > 0 ) {
+        $price = $basic['AskingPrice'];
+    }
+
+    // Year: Check BasicInfo first, then Result.
+    if ( ! empty( $basic['YearBuilt'] ) ) {
+        $year = $basic['YearBuilt'];
+    } elseif ( ! empty( $basic['ModelYear'] ) ) {
+        $year = $basic['ModelYear'];
+    } elseif ( ! empty( $result['YearBuilt'] ) ) {
+        $year = $result['YearBuilt'];
+    } elseif ( ! empty( $result['Year'] ) ) {
+        $year = $result['Year'];
+    }
+
+    // LOA: Use LOAFeet if available, otherwise formatted LOA string.
+    if ( isset( $result['LOAFeet'] ) && $result['LOAFeet'] > 0 ) {
+        $loa = $result['LOAFeet'];
+    } elseif ( ! empty( $dims['LOAFeet'] ) ) {
+        $loa = $dims['LOAFeet'];
+    } elseif ( ! empty( $dims['LOA'] ) ) {
+        $loa = $dims['LOA'];
+    } elseif ( ! empty( $result['LOAFeet'] ) ) {
+        $loa = $result['LOAFeet'];
+    }
+
+    // MLSID: From Result.
+    if ( ! empty( $result['MLSID'] ) ) {
+        $mlsid = $result['MLSID'];
+    } elseif ( ! empty( $result['VesselID'] ) ) {
+        $mlsid = $result['VesselID'];
+    }
+
+    return array(
+        'VesselID' => $vessel_id,
+        'Name'     => $name,
+        'Price'    => $price,
+        'Year'     => $year,
+        'LOA'      => $loa,
+        'MLSId'    => $mlsid,
+    );
+}
+
+/**
+ * Import page (Yachts → YATCO Import).
+ */
+function yatco_import_page() {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        return;
+    }
+
+    $token = yatco_get_token();
+    echo '<div class="wrap"><h1>YATCO Import</h1>';
+
+    if ( empty( $token ) ) {
+        echo '<div class="notice notice-error"><p>Please set your Basic token in <a href="' . esc_url( admin_url( 'options-general.php?page=yatco_api' ) ) . '">Settings → YATCO API</a> first.</p></div>';
+        echo '</div>';
+        return;
+    }
+
+    $criteria_price_min = isset( $_POST['price_min'] ) ? floatval( $_POST['price_min'] ) : '';
+    $criteria_price_max = isset( $_POST['price_max'] ) ? floatval( $_POST['price_max'] ) : '';
+    $criteria_year_min  = isset( $_POST['year_min'] ) ? intval( $_POST['year_min'] ) : '';
+    $criteria_year_max  = isset( $_POST['year_max'] ) ? intval( $_POST['year_max'] ) : '';
+    $criteria_loa_min   = isset( $_POST['loa_min'] ) ? floatval( $_POST['loa_min'] ) : '';
+    $criteria_loa_max   = isset( $_POST['loa_max'] ) ? floatval( $_POST['loa_max'] ) : '';
+    $max_records        = isset( $_POST['max_records'] ) ? intval( $_POST['max_records'] ) : 50;
+    if ( $max_records <= 0 ) {
+        $max_records = 50;
+    }
+
+    $preview_results = array();
+    $message         = '';
+
+    // Handle import action.
+    if ( isset( $_POST['yatco_import_selected'] ) && ! empty( $_POST['vessel_ids'] ) && is_array( $_POST['vessel_ids'] ) && check_admin_referer( 'yatco_import_action', 'yatco_import_nonce' ) ) {
+        $imported = 0;
+        foreach ( $_POST['vessel_ids'] as $vessel_id ) {
+            $vessel_id = intval( $vessel_id );
+            if ( $vessel_id <= 0 ) {
+                continue;
+            }
+            $result = yatco_import_single_vessel( $token, $vessel_id );
+            if ( ! is_wp_error( $result ) ) {
+                $imported++;
+            }
+        }
+        $message = sprintf( '%d vessel(s) imported/updated.', $imported );
+        echo '<div class="notice notice-success"><p>' . esc_html( $message ) . '</p></div>';
+    }
+
+    // Handle preview action.
+    if ( isset( $_POST['yatco_preview_listings'] ) && check_admin_referer( 'yatco_import_action', 'yatco_import_nonce' ) ) {
+
+        $ids = yatco_get_active_vessel_ids( $token, $max_records );
+
+        if ( is_wp_error( $ids ) ) {
+            echo '<div class="notice notice-error"><p>Error fetching active vessel IDs: ' . esc_html( $ids->get_error_message() ) . '</p></div>';
+        } elseif ( empty( $ids ) ) {
+            echo '<div class="notice notice-warning"><p>No active vessels returned from YATCO.</p></div>';
+        } else {
+            foreach ( $ids as $id ) {
+                $full = yatco_fetch_fullspecs( $token, $id );
+                if ( is_wp_error( $full ) ) {
+                    continue;
+                }
+
+                $brief = yatco_build_brief_from_fullspecs( $id, $full );
+
+                // Apply basic filtering in PHP based on criteria.
+                $price = ! empty( $brief['Price'] ) ? floatval( $brief['Price'] ) : null;
+                $year  = ! empty( $brief['Year'] ) ? intval( $brief['Year'] ) : null;
+                // LOA might be a formatted string, extract numeric value.
+                $loa_raw = $brief['LOA'];
+                if ( is_string( $loa_raw ) && preg_match( '/([0-9.]+)/', $loa_raw, $matches ) ) {
+                    $loa = floatval( $matches[1] );
+                } elseif ( ! empty( $loa_raw ) ) {
+                    $loa = floatval( $loa_raw );
+                } else {
+                    $loa = null;
+                }
+
+                if ( $criteria_price_min !== '' && ( is_null( $price ) || $price <= 0 || $price < $criteria_price_min ) ) {
+                    continue;
+                }
+                if ( $criteria_price_max !== '' && ( is_null( $price ) || $price <= 0 || $price > $criteria_price_max ) ) {
+                    continue;
+                }
+                if ( $criteria_year_min !== '' && ( is_null( $year ) || $year <= 0 || $year < $criteria_year_min ) ) {
+                    continue;
+                }
+                if ( $criteria_year_max !== '' && ( is_null( $year ) || $year <= 0 || $year > $criteria_year_max ) ) {
+                    continue;
+                }
+                if ( $criteria_loa_min !== '' && ( is_null( $loa ) || $loa <= 0 || $loa < $criteria_loa_min ) ) {
+                    continue;
+                }
+                if ( $criteria_loa_max !== '' && ( is_null( $loa ) || $loa <= 0 || $loa > $criteria_loa_max ) ) {
+                    continue;
+                }
+
+                $preview_results[] = $brief;
+            }
+
+            if ( empty( $preview_results ) ) {
+                echo '<div class="notice notice-warning"><p>No vessels matched your criteria after filtering FullSpecsAll data.</p></div>';
+            }
+        }
+    }
+
+    ?>
+    <h2>Import Criteria</h2>
+    <form method="post">
+        <?php wp_nonce_field( 'yatco_import_action', 'yatco_import_nonce' ); ?>
+        <table class="form-table">
+            <tr>
+                <th scope="row">Price (USD)</th>
+                <td>
+                    Min: <input type="number" step="1" name="price_min" value="<?php echo esc_attr( $criteria_price_min ); ?>" />
+                    Max: <input type="number" step="1" name="price_max" value="<?php echo esc_attr( $criteria_price_max ); ?>" />
+                </td>
+            </tr>
+            <tr>
+                <th scope="row">Length (LOA)</th>
+                <td>
+                    Min: <input type="number" step="0.1" name="loa_min" value="<?php echo esc_attr( $criteria_loa_min ); ?>" />
+                    Max: <input type="number" step="0.1" name="loa_max" value="<?php echo esc_attr( $criteria_loa_max ); ?>" />
+                </td>
+            </tr>
+            <tr>
+                <th scope="row">Year Built</th>
+                <td>
+                    Min: <input type="number" step="1" name="year_min" value="<?php echo esc_attr( $criteria_year_min ); ?>" />
+                    Max: <input type="number" step="1" name="year_max" value="<?php echo esc_attr( $criteria_year_max ); ?>" />
+                </td>
+            </tr>
+            <tr>
+                <th scope="row">Max Records</th>
+                <td>
+                    <input type="number" step="1" name="max_records" value="<?php echo esc_attr( $max_records ); ?>" />
+                    <p class="description">Maximum number of active vessels to fetch from YATCO before filtering (default 50).</p>
+                </td>
+            </tr>
+        </table>
+
+        <?php submit_button( 'Preview Listings', 'primary', 'yatco_preview_listings' ); ?>
+
+        <?php if ( ! empty( $preview_results ) ) : ?>
+            <h2>Preview Results</h2>
+            <p>Select the vessels you want to import or update.</p>
+            <table class="widefat fixed striped">
+                <thead>
+                    <tr>
+                        <th class="manage-column column-cb check-column"><input type="checkbox" onclick="jQuery('.yatco-vessel-checkbox').prop('checked', this.checked);" /></th>
+                        <th>Vessel ID</th>
+                        <th>MLS ID</th>
+                        <th>Name</th>
+                        <th>Price</th>
+                        <th>Year</th>
+                        <th>LOA</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ( $preview_results as $row ) : ?>
+                        <tr>
+                            <th scope="row" class="check-column">
+                                <input class="yatco-vessel-checkbox" type="checkbox" name="vessel_ids[]" value="<?php echo esc_attr( $row['VesselID'] ); ?>" />
+                            </th>
+                            <td><?php echo esc_html( $row['VesselID'] ); ?></td>
+                            <td><?php echo esc_html( $row['MLSId'] ); ?></td>
+                            <td><?php echo esc_html( $row['Name'] ); ?></td>
+                            <td><?php echo esc_html( $row['Price'] ); ?></td>
+                            <td><?php echo esc_html( $row['Year'] ); ?></td>
+                            <td><?php echo esc_html( $row['LOA'] ); ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+            <?php submit_button( 'Import Selected', 'primary', 'yatco_import_selected' ); ?>
+        <?php endif; ?>
+    </form>
+    <?php
+
+    echo '</div>';
+}
+
+/**
+ * Import a single vessel ID into the Yacht CPT.
+ */
+function yatco_import_single_vessel( $token, $vessel_id ) {
+    $full = yatco_fetch_fullspecs( $token, $vessel_id );
+    if ( is_wp_error( $full ) ) {
+        return $full;
+    }
+
+    // Get Result and BasicInfo for easier access.
+    $result = isset( $full['Result'] ) ? $full['Result'] : array();
+    $basic  = isset( $full['BasicInfo'] ) ? $full['BasicInfo'] : array();
+    $dims   = isset( $full['Dimensions'] ) ? $full['Dimensions'] : array();
+    $vd     = isset( $full['VD'] ) ? $full['VD'] : array();
+    $misc   = isset( $full['MiscInfo'] ) ? $full['MiscInfo'] : array();
+
+    // Basic fields – updated to match actual API structure.
+    $name   = '';
+    $price  = '';
+    $year   = '';
+    $loa    = '';
+    $mlsid  = '';
+    $make   = '';
+    $class  = '';
+    $desc   = '';
+
+    // Vessel name: Check Result.VesselName, then BasicInfo.BoatName.
+    if ( ! empty( $result['VesselName'] ) ) {
+        $name = $result['VesselName'];
+    } elseif ( ! empty( $basic['BoatName'] ) ) {
+        $name = $basic['BoatName'];
+    }
+
+    // Price: Prefer USD price from BasicInfo, fallback to Result.AskingPriceCompare.
+    if ( isset( $basic['AskingPriceUSD'] ) && $basic['AskingPriceUSD'] > 0 ) {
+        $price = $basic['AskingPriceUSD'];
+    } elseif ( isset( $result['AskingPriceCompare'] ) && $result['AskingPriceCompare'] > 0 ) {
+        $price = $result['AskingPriceCompare'];
+    } elseif ( isset( $basic['AskingPrice'] ) && $basic['AskingPrice'] > 0 ) {
+        $price = $basic['AskingPrice'];
+    }
+
+    // Year: Check BasicInfo first, then Result.
+    if ( ! empty( $basic['YearBuilt'] ) ) {
+        $year = $basic['YearBuilt'];
+    } elseif ( ! empty( $basic['ModelYear'] ) ) {
+        $year = $basic['ModelYear'];
+    } elseif ( ! empty( $result['YearBuilt'] ) ) {
+        $year = $result['YearBuilt'];
+    } elseif ( ! empty( $result['Year'] ) ) {
+        $year = $result['Year'];
+    }
+
+    // LOA: Use LOAFeet if available, otherwise formatted LOA string.
+    if ( isset( $result['LOAFeet'] ) && $result['LOAFeet'] > 0 ) {
+        $loa = $result['LOAFeet'];
+    } elseif ( ! empty( $dims['LOAFeet'] ) ) {
+        $loa = $dims['LOAFeet'];
+    } elseif ( ! empty( $dims['LOA'] ) ) {
+        $loa = $dims['LOA'];
+    }
+
+    // MLSID: From Result.
+    if ( ! empty( $result['MLSID'] ) ) {
+        $mlsid = $result['MLSID'];
+    } elseif ( ! empty( $result['VesselID'] ) ) {
+        $mlsid = $result['VesselID'];
+    }
+
+    // Builder: From BasicInfo.
+    if ( ! empty( $basic['Builder'] ) ) {
+        $make = $basic['Builder'];
+    } elseif ( ! empty( $result['BuilderName'] ) ) {
+        $make = $result['BuilderName'];
+    }
+
+    // Vessel class: From BasicInfo.MainCategory, or Result.MainCategoryText.
+    if ( ! empty( $basic['MainCategory'] ) ) {
+        $class = $basic['MainCategory'];
+    } elseif ( ! empty( $result['MainCategoryText'] ) ) {
+        $class = $result['MainCategoryText'];
+    }
+
+    // Description: From VD or MiscInfo.
+    if ( ! empty( $vd['VesselDescriptionShortDescriptionNoStyles'] ) ) {
+        $desc = $vd['VesselDescriptionShortDescriptionNoStyles'];
+    } elseif ( ! empty( $misc['VesselDescriptionShortDescription'] ) ) {
+        $desc = $misc['VesselDescriptionShortDescription'];
+    } elseif ( ! empty( $vd['VesselDescriptionShortDescription'] ) ) {
+        $desc = $vd['VesselDescriptionShortDescription'];
+    }
+
+    // Find existing post by MLSID if available.
+    $post_id = 0;
+    if ( ! empty( $mlsid ) ) {
+        $existing = get_posts(
+            array(
+                'post_type'   => 'yacht',
+                'meta_key'    => 'yacht_mlsid',
+                'meta_value'  => $mlsid,
+                'numberposts' => 1,
+                'fields'      => 'ids',
+            )
+        );
+        if ( ! empty( $existing ) ) {
+            $post_id = (int) $existing[0];
+        }
+    }
+
+    $post_data = array(
+        'post_type'   => 'yacht',
+        'post_title'  => $name ? $name : 'Yacht ' . $vessel_id,
+        'post_status' => 'publish',
+    );
+
+    if ( $post_id ) {
+        $post_data['ID'] = $post_id;
+        $post_id         = wp_update_post( $post_data );
+    } else {
+        $post_id = wp_insert_post( $post_data );
+    }
+
+    if ( is_wp_error( $post_id ) || ! $post_id ) {
+        return new WP_Error( 'yatco_post_error', 'Failed to create or update yacht post.' );
+    }
+
+    // Store core meta – these can be mapped to ACF fields.
+    update_post_meta( $post_id, 'yacht_mlsid', $mlsid );
+    update_post_meta( $post_id, 'yacht_price', $price );
+    update_post_meta( $post_id, 'yacht_year', $year );
+    update_post_meta( $post_id, 'yacht_length', $loa );
+    update_post_meta( $post_id, 'yacht_make', $make );
+    update_post_meta( $post_id, 'yacht_class', $class );
+    update_post_meta( $post_id, 'yacht_fullspecs_raw', $full );
+
+    if ( ! empty( $desc ) ) {
+        wp_update_post(
+            array(
+                'ID'           => $post_id,
+                'post_content' => $desc,
+            )
+        );
+    }
+
+    // Fetch gallery photos from PhotoGallery array in FullSpecsAll response.
+    if ( isset( $full['PhotoGallery'] ) && is_array( $full['PhotoGallery'] ) && ! empty( $full['PhotoGallery'] ) ) {
+        require_once ABSPATH . 'wp-admin/includes/media.php';
+        require_once ABSPATH . 'wp-admin/includes/file.php';
+        require_once ABSPATH . 'wp-admin/includes/image.php';
+
+        $attach_ids = array();
+
+        foreach ( $full['PhotoGallery'] as $photo ) {
+            // Use largeImageURL if available, fallback to medium or small.
+            $url = '';
+            if ( ! empty( $photo['largeImageURL'] ) ) {
+                $url = $photo['largeImageURL'];
+            } elseif ( ! empty( $photo['mediumImageURL'] ) ) {
+                $url = $photo['mediumImageURL'];
+            } elseif ( ! empty( $photo['smallImageURL'] ) ) {
+                $url = $photo['smallImageURL'];
+            }
+
+            if ( empty( $url ) ) {
+                continue;
+            }
+
+            $caption   = isset( $photo['Caption'] ) ? $photo['Caption'] : '';
+            $attach_id = media_sideload_image( $url, $post_id, $caption, 'id' );
+            if ( ! is_wp_error( $attach_id ) ) {
+                $attach_ids[] = $attach_id;
+            }
+        }
+
+        if ( ! empty( $attach_ids ) ) {
+            set_post_thumbnail( $post_id, $attach_ids[0] );
+            update_post_meta( $post_id, 'yacht_images', $attach_ids );
+        }
+    }
+
+    return $post_id;
+}
