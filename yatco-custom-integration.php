@@ -113,10 +113,11 @@ function yatco_options_page() {
     echo '<h2>Test API Connection</h2>';
     echo '<p>This test calls the <code>/ForSale/vessel/activevesselmlsid</code> endpoint using your Basic token.</p>';
     echo '<form method="post">';
+    wp_nonce_field( 'yatco_test_connection', 'yatco_test_connection_nonce' );
     submit_button( 'Test Connection', 'secondary', 'yatco_test_connection' );
     echo '</form>';
 
-    if ( isset( $_POST['yatco_test_connection'] ) && check_admin_referer( 'yatco_api-options' ) ) {
+    if ( isset( $_POST['yatco_test_connection'] ) && check_admin_referer( 'yatco_test_connection', 'yatco_test_connection_nonce' ) ) {
         if ( empty( $token ) ) {
             echo '<div class="notice notice-error"><p>Missing token.</p></div>';
         } else {
