@@ -375,7 +375,9 @@ function yatco_import_page() {
     // Handle preview action.
     if ( isset( $_POST['yatco_preview_listings'] ) && check_admin_referer( 'yatco_import_action', 'yatco_import_nonce' ) ) {
 
-        $ids = yatco_get_active_vessel_ids( $token, $max_records );
+        // Fetch more IDs than needed to account for filtering (5x the desired results, max 100)
+        $ids_to_fetch = min( $max_records * 5, 100 );
+        $ids = yatco_get_active_vessel_ids( $token, $ids_to_fetch );
 
         if ( is_wp_error( $ids ) ) {
             echo '<div class="notice notice-error"><p>Error fetching active vessel IDs: ' . esc_html( $ids->get_error_message() ) . '</p></div>';
@@ -383,6 +385,11 @@ function yatco_import_page() {
             echo '<div class="notice notice-warning"><p>No active vessels returned from YATCO.</p></div>';
         } else {
             foreach ( $ids as $id ) {
+                // Stop if we've reached the desired number of results
+                if ( count( $preview_results ) >= $max_records ) {
+                    break;
+                }
+
                 $full = yatco_fetch_fullspecs( $token, $id );
                 if ( is_wp_error( $full ) ) {
                     continue;
@@ -441,6 +448,8 @@ function yatco_import_page() {
 
             if ( empty( $preview_results ) ) {
                 echo '<div class="notice notice-warning"><p>No vessels matched your criteria after filtering FullSpecsAll data.</p></div>';
+            } elseif ( count( $preview_results ) < $max_records ) {
+                echo '<div class="notice notice-info"><p>Found ' . count( $preview_results ) . ' vessel(s) matching your criteria (requested up to ' . $max_records . ').</p></div>';
             }
         }
     }
@@ -472,10 +481,10 @@ function yatco_import_page() {
                 </td>
             </tr>
             <tr>
-                <th scope="row">Max Records</th>
+                <th scope="row">Max Results</th>
                 <td>
                     <input type="number" step="1" name="max_records" value="<?php echo esc_attr( $max_records ); ?>" />
-                    <p class="description">Maximum number of active vessels to fetch from YATCO before filtering (default 50).</p>
+                    <p class="description">Maximum number of matching vessels to display (default 50). The system will fetch up to 5x this number to find matches.</p>
                 </td>
             </tr>
         </table>
