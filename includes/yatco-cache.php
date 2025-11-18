@@ -14,11 +14,16 @@ if ( ! defined( 'ABSPATH' ) ) {
  * This runs in the background via WP-Cron.
  */
 function yatco_warm_cache_function() {
-    update_transient( 'yatco_cache_warming_status', 'Starting cache warm-up...', 600 );
+    // Save initial status immediately
+    if ( function_exists( 'set_transient' ) ) {
+        set_transient( 'yatco_cache_warming_status', 'Starting cache warm-up...', 600 );
+    }
     
     $token = yatco_get_token();
     if ( empty( $token ) ) {
-        update_transient( 'yatco_cache_warming_status', 'Error: API token not configured', 60 );
+        if ( function_exists( 'set_transient' ) ) {
+            set_transient( 'yatco_cache_warming_status', 'Error: API token not configured', 60 );
+        }
         return;
     }
 
@@ -41,7 +46,9 @@ function yatco_warm_cache_function() {
         'length_unit'   => 'FT',
     );
 
-    update_transient( 'yatco_cache_warming_status', 'Fetching vessel IDs...', 600 );
+    if ( function_exists( 'set_transient' ) ) {
+        set_transient( 'yatco_cache_warming_status', 'Fetching vessel IDs...', 600 );
+    }
     
     // Increase limits for cache warming
     @ini_set( 'max_execution_time', 0 ); // Unlimited
@@ -52,14 +59,18 @@ function yatco_warm_cache_function() {
     $ids = yatco_get_active_vessel_ids( $token, 0 );
     
     if ( is_wp_error( $ids ) ) {
-        update_transient( 'yatco_cache_warming_status', 'Error: ' . $ids->get_error_message(), 60 );
+        if ( function_exists( 'set_transient' ) ) {
+            set_transient( 'yatco_cache_warming_status', 'Error: ' . $ids->get_error_message(), 60 );
+        }
         return;
     }
 
     $vessel_count = count( $ids );
-    update_transient( 'yatco_cache_warming_status', "Processing {$vessel_count} vessels...", 600 );
-
-    // Check for partial progress
+    if ( function_exists( 'set_transient' ) ) {
+        set_transient( 'yatco_cache_warming_status', "Processing {$vessel_count} vessels...", 600 );
+    }
+    
+    // Save initial progress immediately (so we can see it started)
     $cache_key_progress = 'yatco_cache_warming_progress';
     $progress = get_transient( $cache_key_progress );
     $start_from = 0;
@@ -75,8 +86,18 @@ function yatco_warm_cache_function() {
     } else {
         $vessels = array();
         $start_time = time();
+        // Save initial progress so we can see it started
+        $initial_progress = array(
+            'last_processed' => 0,
+            'total'         => $vessel_count,
+            'processed'     => 0,
+            'vessels'       => array(),
+            'start_time'    => $start_time,
+            'timestamp'     => time(),
+        );
+        set_transient( $cache_key_progress, $initial_progress, 3600 );
     }
-    
+
     $batch_size = 20; // Process 20 at a time
     $processed = 0;
     $errors = 0;
@@ -85,35 +106,6 @@ function yatco_warm_cache_function() {
     foreach ( $ids as $index => $id ) {
         $processed++;
         $actual_index = $start_from + $index;
-        
-        // Save progress every batch
-        if ( $processed % $batch_size === 0 ) {
-            $batch_num++;
-            
-            // Save progress
-            $progress_data = array(
-                'last_processed' => $actual_index,
-                'total'         => $vessel_count,
-                'processed'     => count( $vessels ),
-                'vessels'       => $vessels,
-                'start_time'    => $start_time,
-                'timestamp'     => time(),
-            );
-            set_transient( $cache_key_progress, $progress_data, 3600 );
-            
-            // Update status
-            $percent = round( ( $actual_index / $vessel_count ) * 100, 1 );
-            update_transient( 'yatco_cache_warming_status', "Processing vessel {$actual_index} of {$vessel_count} ({$percent}%)...", 600 );
-            
-            // Reset execution time and flush
-            @set_time_limit( 0 );
-            if ( function_exists( 'fastcgi_finish_request' ) ) {
-                @fastcgi_finish_request();
-            }
-            
-            // Small delay to reduce server load
-            usleep( 100000 ); // 0.1 second
-        }
         
         // Reset execution time periodically
         if ( $processed % 10 === 0 ) {
@@ -176,6 +168,41 @@ function yatco_warm_cache_function() {
         );
 
         $vessels[] = $vessel_data;
+        
+        // Save progress every batch OR after first vessel (to show immediate feedback)
+        if ( $processed % $batch_size === 0 || $processed === 1 ) {
+            $batch_num++;
+            
+            // Save progress
+            $progress_data = array(
+                'last_processed' => $actual_index + 1, // +1 because we just processed this one
+                'total'         => $vessel_count,
+                'processed'     => count( $vessels ),
+                'vessels'       => $vessels,
+                'start_time'    => $start_time,
+                'timestamp'     => time(),
+            );
+            if ( function_exists( 'set_transient' ) ) {
+                set_transient( $cache_key_progress, $progress_data, 3600 );
+            }
+            
+            // Update status
+            $percent = round( ( ( $actual_index + 1 ) / $vessel_count ) * 100, 1 );
+            if ( function_exists( 'set_transient' ) ) {
+                set_transient( 'yatco_cache_warming_status', "Processing vessel " . ( $actual_index + 1 ) . " of {$vessel_count} ({$percent}%)...", 600 );
+            }
+            
+            // Reset execution time and flush
+            @set_time_limit( 0 );
+            if ( function_exists( 'fastcgi_finish_request' ) ) {
+                @fastcgi_finish_request();
+            }
+            
+            // Small delay to reduce server load (skip on first vessel for faster feedback)
+            if ( $processed > 1 ) {
+                usleep( 100000 ); // 0.1 second
+            }
+        }
     }
 
     // Collect unique values for filter dropdowns
@@ -225,7 +252,9 @@ function yatco_warm_cache_function() {
     if ( $errors > 0 ) {
         $success_msg .= " ({$errors} errors)";
     }
-    update_transient( 'yatco_cache_warming_status', $success_msg, 300 );
+    if ( function_exists( 'set_transient' ) ) {
+        set_transient( 'yatco_cache_warming_status', $success_msg, 300 );
+    }
 }
 
 /**
