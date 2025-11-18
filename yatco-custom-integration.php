@@ -1,12 +1,11 @@
 <?php
-
 /**
  * Plugin Name: YATCO Custom Integration
  * Description: Fetch selected YATCO vessels into a Yacht custom post type.
  * Version: 3.1
  * Author: Your Name
  * License: GPL-2.0+
-*/
+ */
 
 if ( ! defined( 'ABSPATH' ) ) {
     exit;
