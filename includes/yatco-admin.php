@@ -203,21 +203,48 @@ function yatco_options_page() {
                 $estimated_remaining = $remaining * $avg_time_per_vessel;
                 $estimated_remaining_formatted = $estimated_remaining > 0 ? human_time_diff( $current_time, $current_time + $estimated_remaining ) : 'calculating...';
                 
-                echo '<div class="notice notice-warning">';
-                echo '<p class="yatco-progress-text"><strong>Progress:</strong> Processed ' . number_format( $last_processed ) . ' of ' . number_format( $total ) . ' vessels (' . $percent . '%). ' . number_format( $cached ) . ' vessels cached so far.</p>';
+                echo '<div class="notice notice-warning yatco-live-progress-container">';
+                echo '<div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">';
+                echo '<span class="yatco-live-indicator" style="display: inline-block; width: 12px; height: 12px; background-color: #46b450; border-radius: 50%; animation: yatco-pulse 2s infinite;"></span>';
+                echo '<p class="yatco-progress-text" style="margin: 0; flex: 1;"><strong>Progress:</strong> Processed <span class="yatco-current-processed">' . number_format( $last_processed ) . '</span> of <span class="yatco-total-vessels">' . number_format( $total ) . '</span> vessels (<span class="yatco-percent">' . $percent . '</span>%). <span class="yatco-cached-count">' . number_format( $cached ) . '</span> vessels cached so far.</p>';
+                echo '</div>';
                 
-                // Progress bar
-                echo '<div style="width: 100%; background-color: #f0f0f0; border-radius: 4px; height: 30px; margin: 10px 0; overflow: hidden; position: relative;">';
-                echo '<div class="yatco-progress-bar-fill" style="width: ' . esc_attr( $percent ) . '%; background: linear-gradient(90deg, #0073aa 0%, #005a87 100%); height: 100%; transition: width 0.3s ease; display: flex; align-items: center; justify-content: center; color: white; font-weight: 600; font-size: 12px;">' . esc_html( $percent ) . '%</div>';
+                // Enhanced progress bar with animation
+                echo '<div class="yatco-progress-bar-container" style="width: 100%; background-color: #f0f0f0; border-radius: 4px; height: 35px; margin: 15px 0; overflow: hidden; position: relative; box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);">';
+                echo '<div class="yatco-progress-bar-fill" style="width: ' . esc_attr( $percent ) . '%; background: linear-gradient(90deg, #0073aa 0%, #005a87 50%, #0073aa 100%); background-size: 200% 100%; height: 100%; transition: width 0.5s ease; display: flex; align-items: center; justify-content: center; color: white; font-weight: 700; font-size: 13px; text-shadow: 0 1px 2px rgba(0,0,0,0.3); animation: yatco-progress-shimmer 2s infinite;">' . esc_html( $percent ) . '%</div>';
+                echo '<div class="yatco-progress-bar-label" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); pointer-events: none; color: #333; font-weight: 600; font-size: 13px; text-shadow: 0 1px 2px rgba(255,255,255,0.8);"></div>';
                 echo '</div>';
                 
                 if ( $elapsed > 0 && $last_processed > 0 ) {
                     $rate = $last_processed / $elapsed;
-                    echo '<p class="yatco-progress-stats"><strong>Rate:</strong> ' . number_format( $rate, 1 ) . ' vessels/second | <strong>Elapsed:</strong> ' . human_time_diff( $start_time, $current_time ) . ' | <strong>Estimated Remaining:</strong> ' . $estimated_remaining_formatted . '</p>';
+                    echo '<div class="yatco-progress-stats" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 15px 0; padding: 15px; background: #f9f9f9; border-radius: 4px;">';
+                    echo '<div><strong>⚡ Rate:</strong> <span class="yatco-rate">' . number_format( $rate, 2 ) . '</span> vessels/sec</div>';
+                    echo '<div><strong>⏱️ Elapsed:</strong> <span class="yatco-elapsed">' . human_time_diff( $start_time, $current_time ) . '</span></div>';
+                    echo '<div><strong>⏳ Remaining:</strong> <span class="yatco-remaining">' . $estimated_remaining_formatted . '</span></div>';
+                    echo '<div><strong>📦 Cached:</strong> <span class="yatco-cached">' . number_format( $cached ) . '</span> vessels</div>';
+                    echo '</div>';
                 }
                 
-                echo '<p><em>Status updates automatically every 5 seconds. If the process was interrupted, it will resume from where it left off on the next run.</em></p>';
+                echo '<p style="margin-top: 10px; font-size: 12px; color: #666;"><em>🟢 Live updates every 2 seconds. If the process was interrupted, it will resume from where it left off on the next run.</em></p>';
                 echo '</div>';
+                
+                // Add CSS animations
+                echo '<style>
+                @keyframes yatco-pulse {
+                    0%, 100% { opacity: 1; transform: scale(1); }
+                    50% { opacity: 0.5; transform: scale(1.2); }
+                }
+                @keyframes yatco-progress-shimmer {
+                    0% { background-position: -200% 0; }
+                    100% { background-position: 200% 0; }
+                }
+                .yatco-progress-bar-fill {
+                    animation: yatco-progress-shimmer 2s infinite linear;
+                }
+                .yatco-live-progress-container {
+                    border-left: 4px solid #ffc107;
+                }
+                </style>';
             }
         }
         
@@ -262,7 +289,29 @@ function yatco_options_page() {
         ?>
         <script>
         (function() {
-            // Auto-refresh progress every 5 seconds if warming is in progress
+            // Smooth number animation helper
+            function animateValue(element, start, end, duration) {
+                if (start === end || !element) return;
+                const range = end - start;
+                const increment = end > start ? 1 : -1;
+                const stepTime = Math.abs(Math.floor(duration / range));
+                let current = start;
+                
+                const timer = setInterval(function() {
+                    current += increment;
+                    if (element) {
+                        element.textContent = current.toLocaleString();
+                    }
+                    if ((increment > 0 && current >= end) || (increment < 0 && current <= end)) {
+                        if (element) {
+                            element.textContent = end.toLocaleString();
+                        }
+                        clearInterval(timer);
+                    }
+                }, stepTime);
+            }
+            
+            // Auto-refresh progress every 2 seconds for live updates
             let refreshInterval = setInterval(function() {
                 const progressDiv = document.querySelector('.yatco-cache-progress-section');
                 if (progressDiv) {
@@ -286,29 +335,52 @@ function yatco_options_page() {
                                 }
                             }
                             
-                            // Update progress
+                            // Update progress with smooth animations
                             if (responseData.progress && responseData.progress.total > 0) {
                                 const percent = Math.round((responseData.progress.last_processed / responseData.progress.total) * 100 * 10) / 10;
+                                
+                                // Update progress bar with smooth transition
                                 const progressBar = document.querySelector('.yatco-progress-bar-fill');
                                 if (progressBar) {
                                     progressBar.style.width = percent + '%';
                                     progressBar.textContent = percent + '%';
+                                    
+                                    // Update label visibility
+                                    const label = document.querySelector('.yatco-progress-bar-label');
+                                    if (label) {
+                                        label.style.display = percent > 15 ? 'none' : 'block';
+                                        label.textContent = percent + '%';
+                                    }
                                 }
                                 
-                                const progressText = document.querySelector('.yatco-progress-text');
-                                if (progressText) {
-                                    progressText.innerHTML = '<strong>Progress:</strong> ' + 
-                                        responseData.progress.last_processed.toLocaleString() + ' of ' + 
-                                        responseData.progress.total.toLocaleString() + ' vessels (' + percent + '%). ' + 
-                                        responseData.progress.processed.toLocaleString() + ' vessels cached so far.';
+                                // Update progress text with smooth number transitions
+                                const currentProcessed = document.querySelector('.yatco-current-processed');
+                                const percentSpan = document.querySelector('.yatco-percent');
+                                const cachedCount = document.querySelector('.yatco-cached-count');
+                                
+                                if (currentProcessed) {
+                                    animateValue(currentProcessed, parseInt(currentProcessed.textContent.replace(/,/g, '')), responseData.progress.last_processed, 500);
+                                }
+                                if (percentSpan) {
+                                    percentSpan.textContent = percent;
+                                }
+                                if (cachedCount) {
+                                    animateValue(cachedCount, parseInt(cachedCount.textContent.replace(/,/g, '')), responseData.progress.processed, 500);
                                 }
                                 
-                                const progressStats = document.querySelector('.yatco-progress-stats');
-                                if (progressStats && responseData.progress.rate) {
-                                    progressStats.innerHTML = '<strong>Rate:</strong> ' + 
-                                        parseFloat(responseData.progress.rate).toFixed(1) + ' vessels/second | ' +
-                                        '<strong>Elapsed:</strong> ' + responseData.progress.elapsed + ' | ' +
-                                        '<strong>Estimated Remaining:</strong> ' + responseData.progress.estimated_remaining;
+                                // Update stats grid
+                                const rateEl = document.querySelector('.yatco-rate');
+                                const elapsedEl = document.querySelector('.yatco-elapsed');
+                                const remainingEl = document.querySelector('.yatco-remaining');
+                                const cachedEl = document.querySelector('.yatco-cached');
+                                
+                                if (responseData.progress.rate) {
+                                    if (rateEl) rateEl.textContent = parseFloat(responseData.progress.rate).toFixed(2);
+                                    if (elapsedEl) elapsedEl.textContent = responseData.progress.elapsed;
+                                    if (remainingEl) remainingEl.textContent = responseData.progress.estimated_remaining;
+                                    if (cachedEl) {
+                                        animateValue(cachedEl, parseInt(cachedEl.textContent.replace(/,/g, '')), responseData.progress.processed, 500);
+                                    }
                                 }
                             }
                             
@@ -332,7 +404,7 @@ function yatco_options_page() {
                     // Progress section removed, stop refreshing
                     clearInterval(refreshInterval);
                 }
-            }, 5000); // Refresh every 5 seconds
+            }, 2000); // Refresh every 2 seconds for live updates
             
             // Stop refreshing when page is hidden
             document.addEventListener('visibilitychange', function() {
