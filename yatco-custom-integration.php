@@ -231,9 +231,12 @@ function yatco_get_active_vessel_ids( $token, $max_records = 50 ) {
         }
     }
 
+    // Only limit if explicitly requested and max_records > 0
+    // If max_records is 0, return all IDs
     if ( $max_records > 0 && count( $ids ) > $max_records ) {
         $ids = array_slice( $ids, 0, $max_records );
     }
+    // If max_records is 0, return all IDs without limiting
 
     return $ids;
 }
@@ -746,7 +749,7 @@ function yatco_register_shortcode() {
 function yatco_vessels_shortcode( $atts ) {
     $atts = shortcode_atts(
         array(
-            'max'           => '20',
+            'max'           => '50',
             'price_min'     => '',
             'price_max'     => '',
             'year_min'      => '',
@@ -790,8 +793,9 @@ function yatco_vessels_shortcode( $atts ) {
         }
     }
 
-    // Fetch more IDs than needed to account for filtering.
-    $ids_to_fetch = min( $max_results * 5, 100 );
+    // Fetch all active vessel IDs (set to 0 to get all, or use a high limit like 10000)
+    // For 7000+ vessels, we need to fetch all IDs
+    $ids_to_fetch = 0; // 0 means fetch all
     $ids = yatco_get_active_vessel_ids( $token, $ids_to_fetch );
 
     if ( is_wp_error( $ids ) ) {
@@ -812,10 +816,19 @@ function yatco_vessels_shortcode( $atts ) {
     $loa_min   = ! empty( $atts['loa_min'] ) && $atts['loa_min'] !== '0' ? floatval( $atts['loa_min'] ) : '';
     $loa_max   = ! empty( $atts['loa_max'] ) && $atts['loa_max'] !== '0' ? floatval( $atts['loa_max'] ) : '';
 
-        foreach ( $ids as $id ) {
-        if ( count( $vessels ) >= $max_results ) {
-            break;
-        }
+    // Process ALL vessel IDs to make all 7000+ vessels searchable/filterable
+    // Note: For large datasets (7000+), this may take time. Consider increasing PHP max_execution_time.
+    $vessel_count = count( $ids );
+    $processed = 0;
+    $error_count = 0;
+    
+    foreach ( $ids as $id ) {
+        $processed++;
+        
+        // Optional: Show progress for large datasets (uncomment if needed)
+        // if ( $processed % 100 === 0 ) {
+        //     set_time_limit( 60 ); // Reset execution time
+        // }
 
         $full = yatco_fetch_fullspecs( $token, $id );
         if ( is_wp_error( $full ) ) {
@@ -933,7 +946,7 @@ function yatco_vessels_shortcode( $atts ) {
 
     if ( empty( $vessels ) ) {
         $output = '<p>No vessels match your criteria.</p>';
-    } else {
+            } else {
         $columns = intval( $atts['columns'] );
         if ( $columns < 1 || $columns > 4 ) {
             $columns = 3;
@@ -1047,6 +1060,9 @@ function yatco_vessels_shortcode( $atts ) {
             </div>
             <div class="yatco-results-header">
                 <span class="yatco-results-count">0 - 0 of <span id="yatco-total-count"><?php echo count( $vessels ); ?></span> YACHTS FOUND</span>
+                <?php if ( $vessel_count > 1000 ) : ?>
+                    <div class="yatco-loading-note">Loaded <?php echo number_format( count( $vessels ) ); ?> of <?php echo number_format( $vessel_count ); ?> vessels</div>
+                <?php endif; ?>
                 <div class="yatco-sort-view">
                     <label for="yatco-sort">Sort by:</label>
                     <select id="yatco-sort" class="yatco-sort-select">
@@ -1247,6 +1263,56 @@ function yatco_vessels_shortcode( $atts ) {
                 border: 1px solid #ddd;
                 border-radius: 4px;
             }
+            .yatco-pagination {
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                gap: 15px;
+                margin: 30px 0;
+                padding: 20px 0;
+            }
+            .yatco-pagination-btn {
+                padding: 10px 20px;
+                border: 1px solid #0073aa;
+                background: #fff;
+                color: #0073aa;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 14px;
+                font-weight: 600;
+                transition: all 0.2s;
+            }
+            .yatco-pagination-btn:hover {
+                background: #0073aa;
+                color: #fff;
+            }
+            .yatco-pagination-btn.active {
+                background: #0073aa;
+                color: #fff;
+                font-weight: 700;
+            }
+            .yatco-page-info {
+                font-weight: 600;
+                color: #333;
+                margin-left: 15px;
+            }
+            .yatco-page-dots {
+                padding: 10px 5px;
+                color: #666;
+            }
+            .yatco-pagination {
+                flex-wrap: wrap;
+                gap: 5px;
+            }
+            .yatco-pagination-btn.yatco-page-num {
+                min-width: 40px;
+            }
+            .yatco-loading-note {
+                font-size: 12px;
+                color: #666;
+                font-style: italic;
+                margin-top: 5px;
+            }
             .yatco-vessels-grid {
                 display: grid;
                 gap: 20px;
@@ -1410,31 +1476,31 @@ function yatco_vessels_shortcode( $atts ) {
                     
                     // Keywords
                     if (keywordVal && !name.includes(keywordVal) && !location.includes(keywordVal)) {
-                        return false;
-                    }
+            return false;
+        }
                     
                     // Builder
                     if (builderVal && vesselBuilder !== builderVal) {
-                        return false;
-                    }
+            return false;
+        }
                     
                     // Year
                     if (yearMinVal && (year === 0 || year < yearMinVal)) {
-                        return false;
-                    }
+            return false;
+        }
                     if (yearMaxVal && (year === 0 || year > yearMaxVal)) {
-                        return false;
-                    }
+            return false;
+        }
                     
                     // Length
                     const loa = currentLengthUnit === 'M' ? loaMeters : loaFeet;
                     if (loaMinVal && (loa === 0 || loa < loaMinVal)) {
-                        return false;
-                    }
+            return false;
+        }
                     if (loaMaxVal && (loa === 0 || loa > loaMaxVal)) {
-                        return false;
-                    }
-                    
+            return false;
+        }
+
                     // Price
                     const price = currentCurrency === 'EUR' ? priceEur : priceUsd;
                     if (priceMinVal && (price === 0 || price < priceMinVal)) {
@@ -1502,29 +1568,132 @@ function yatco_vessels_shortcode( $atts ) {
                 });
             }
             
+            // Pagination - shows 50 vessels per page
+            let currentPage = 1;
+            const vesselsPerPage = 50;
+            
+            // Get pagination range with ellipsis for large page counts (e.g., 1 ... 5 6 7 ... 140)
+            function getPaginationRange(current, total) {
+                const delta = 2;
+                const range = [];
+                const rangeWithDots = [];
+                
+                if (total <= 7) {
+                    // Show all pages if 7 or fewer
+                    for (let i = 1; i <= total; i++) {
+                        rangeWithDots.push(i);
+                    }
+                    return rangeWithDots;
+                }
+                
+                for (let i = Math.max(2, current - delta); i <= Math.min(total - 1, current + delta); i++) {
+                    range.push(i);
+                }
+                
+                if (current - delta > 2) {
+                    rangeWithDots.push(1, '...');
+                } else {
+                    rangeWithDots.push(1);
+                }
+                
+                rangeWithDots.push(...range);
+                
+                if (current + delta < total - 1) {
+                    rangeWithDots.push('...', total);
+                } else {
+                    if (total > 1) {
+                        rangeWithDots.push(total);
+                    }
+                }
+                
+                return rangeWithDots;
+            }
+            
+            function paginateVessels(vessels) {
+                const start = (currentPage - 1) * vesselsPerPage;
+                const end = start + vesselsPerPage;
+                return vessels.slice(start, end);
+            }
+            
+            function updatePaginationControls(totalVessels) {
+                const totalPages = Math.ceil(totalVessels / vesselsPerPage);
+                if (totalPages <= 1) {
+                    // Hide pagination if only one page
+                    const paginationContainer = document.querySelector('.yatco-pagination');
+                    if (paginationContainer) {
+                        paginationContainer.style.display = 'none';
+                    }
+                    return;
+                }
+                
+                const pageRange = getPaginationRange(currentPage, totalPages);
+                let paginationHtml = '<div class="yatco-pagination">';
+                
+                // Previous button
+                if (currentPage > 1) {
+                    paginationHtml += `<button class="yatco-pagination-btn yatco-prev-btn" onclick="window.yatcoGoToPage(${currentPage - 1})">‹ Previous</button>`;
+                }
+                
+                // Page numbers
+                pageRange.forEach((page, index) => {
+                    if (page === '...') {
+                        paginationHtml += `<span class="yatco-page-dots">...</span>`;
+                    } else {
+                        const isActive = page === currentPage;
+                        paginationHtml += `<button class="yatco-pagination-btn yatco-page-num ${isActive ? 'active' : ''}" onclick="window.yatcoGoToPage(${page})">${page}</button>`;
+                    }
+                });
+                
+                // Next button
+                if (currentPage < totalPages) {
+                    paginationHtml += `<button class="yatco-pagination-btn yatco-next-btn" onclick="window.yatcoGoToPage(${currentPage + 1})">Next ›</button>`;
+                }
+                
+                paginationHtml += `<span class="yatco-page-info">Page ${currentPage} of ${totalPages}</span>`;
+                paginationHtml += '</div>';
+                
+                let paginationContainer = document.querySelector('.yatco-pagination');
+                if (!paginationContainer) {
+                    paginationContainer = document.createElement('div');
+                    paginationContainer.className = 'yatco-pagination';
+                    if (grid && grid.parentNode) {
+                        grid.parentNode.insertBefore(paginationContainer, grid.nextSibling);
+                    }
+                }
+                paginationContainer.innerHTML = paginationHtml;
+                paginationContainer.style.display = 'flex';
+            }
+            
+            window.yatcoGoToPage = function(page) {
+                currentPage = page;
+                filterAndDisplay();
+            };
+            
             function filterAndDisplay() {
                 const filtered = filterVessels();
                 const sorted = sortVessels(filtered);
+                const paginated = paginateVessels(sorted);
                 
                 // Hide all vessels
                 allVessels.forEach(v => v.style.display = 'none');
                 
-                // Show filtered vessels
-                sorted.forEach(v => {
+                // Show paginated vessels
+                paginated.forEach(v => {
                     v.style.display = '';
                     grid.appendChild(v);
                 });
                 
                 // Update count
                 if (resultsCount) {
-                    const shown = sorted.length;
+                    const totalFiltered = sorted.length;
+                    const shownStart = totalFiltered > 0 ? (currentPage - 1) * vesselsPerPage + 1 : 0;
+                    const shownEnd = Math.min(currentPage * vesselsPerPage, totalFiltered);
                     const total = totalCount ? totalCount.textContent : allVessels.length;
-                    resultsCount.innerHTML = `${shown > 0 ? 1 : 0} - ${shown} of <span id="yatco-total-count">${total}</span> YACHTS FOUND`;
+                    resultsCount.innerHTML = `${shownStart} - ${shownEnd} of <span id="yatco-total-count">${totalFiltered}</span> YACHTS FOUND`;
                 }
-            }
-            
-            if (searchBtn) {
-                searchBtn.addEventListener('click', filterAndDisplay);
+                
+                // Update pagination
+                updatePaginationControls(sorted.length);
             }
             
             if (resetBtn) {
@@ -1544,13 +1713,24 @@ function yatco_vessels_shortcode( $atts ) {
                     if (sort) sort.value = '';
                     currentCurrency = currency;
                     currentLengthUnit = lengthUnit;
+                    currentPage = 1;
                     updateToggleButtons();
                     filterAndDisplay();
                 });
             }
             
+            if (searchBtn) {
+                searchBtn.addEventListener('click', function() {
+                    currentPage = 1;
+                    filterAndDisplay();
+                });
+            }
+            
             if (sort) {
-                sort.addEventListener('change', filterAndDisplay);
+                sort.addEventListener('change', function() {
+                    currentPage = 1;
+                    filterAndDisplay();
+                });
             }
             
             // Initialize
