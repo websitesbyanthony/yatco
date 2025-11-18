@@ -37,6 +37,12 @@ register_activation_hook( __FILE__, 'yatco_create_cpt' );
 // Register shortcode on init.
 add_action( 'init', 'yatco_register_shortcode' );
 
+// Register cache warming hook
+add_action( 'yatco_warm_cache_hook', 'yatco_warm_cache_function' );
+
+// Schedule periodic cache refresh if enabled
+add_action( 'admin_init', 'yatco_maybe_schedule_cache_refresh' );
+
 /**
  * Admin settings page.
  */
@@ -88,6 +94,14 @@ function yatco_settings_init() {
         'yatco_api',
         'yatco_api_section'
     );
+
+    add_settings_field(
+        'yatco_auto_refresh_cache',
+        'Auto-Refresh Cache',
+        'yatco_auto_refresh_cache_render',
+        'yatco_api',
+        'yatco_api_section'
+    );
 }
 
 function yatco_settings_section_callback() {
@@ -106,6 +120,14 @@ function yatco_cache_duration_render() {
     $cache   = isset( $options['yatco_cache_duration'] ) ? intval( $options['yatco_cache_duration'] ) : 30;
     echo '<input type="number" step="1" min="1" name="yatco_api_settings[yatco_cache_duration]" value="' . esc_attr( $cache ) . '" />';
     echo '<p class="description">How long to cache vessel listings before refreshing (default: 30 minutes).</p>';
+}
+
+function yatco_auto_refresh_cache_render() {
+    $options = get_option( 'yatco_api_settings' );
+    $enabled = isset( $options['yatco_auto_refresh_cache'] ) ? $options['yatco_auto_refresh_cache'] : 'no';
+    echo '<input type="checkbox" name="yatco_api_settings[yatco_auto_refresh_cache]" value="yes" ' . checked( $enabled, 'yes', false ) . ' />';
+    echo '<label>Automatically refresh cache every 6 hours</label>';
+    echo '<p class="description">Enable this to automatically pre-load the cache every 6 hours via WP-Cron.</p>';
 }
 
 /**
@@ -142,6 +164,31 @@ function yatco_options_page() {
             $result = yatco_test_connection( $token );
             echo $result;
         }
+    }
+
+    echo '<hr />';
+    echo '<h2>Cache Management</h2>';
+    echo '<p>Pre-load all vessels into cache to speed up the shortcode display. This may take several minutes for 7000+ vessels.</p>';
+    echo '<form method="post">';
+    wp_nonce_field( 'yatco_warm_cache', 'yatco_warm_cache_nonce' );
+    submit_button( 'Warm Cache (Pre-load All Vessels)', 'primary', 'yatco_warm_cache' );
+    echo '</form>';
+
+    // Handle warm cache action
+    if ( isset( $_POST['yatco_warm_cache'] ) && check_admin_referer( 'yatco_warm_cache', 'yatco_warm_cache_nonce' ) ) {
+        if ( empty( $token ) ) {
+            echo '<div class="notice notice-error"><p>Missing token. Please configure your API token first.</p></div>';
+        } else {
+            // Trigger async cache warming
+            wp_schedule_single_event( time(), 'yatco_warm_cache_hook' );
+            echo '<div class="notice notice-info"><p>Cache warming started in the background. This may take several minutes. The cache will be ready shortly.</p></div>';
+        }
+    }
+
+    // Check if cache warming is in progress
+    $cache_status = get_transient( 'yatco_cache_warming_status' );
+    if ( $cache_status ) {
+        echo '<div class="notice notice-info"><p>Cache Status: ' . esc_html( $cache_status ) . '</p></div>';
     }
 
     echo '</div>';
@@ -781,12 +828,69 @@ function yatco_vessels_shortcode( $atts ) {
     // Get cache key based on attributes.
     $cache_key = 'yatco_vessels_' . md5( serialize( $atts ) );
     
-    // Check cache if enabled.
+    // Check cache if enabled - first check for pre-warmed vessel data (faster)
     if ( $atts['cache'] === 'yes' ) {
         $options = get_option( 'yatco_api_settings' );
         $cache_duration = isset( $options['yatco_cache_duration'] ) ? intval( $options['yatco_cache_duration'] ) : 30;
-        $cached = get_transient( $cache_key );
         
+        // Check for pre-warmed vessel data (much faster than generating from API)
+        $cached_vessels = get_transient( 'yatco_vessels_data' );
+        $cached_builders = get_transient( 'yatco_vessels_builders' );
+        $cached_categories = get_transient( 'yatco_vessels_categories' );
+        $cached_types = get_transient( 'yatco_vessels_types' );
+        $cached_conditions = get_transient( 'yatco_vessels_conditions' );
+        
+        // If we have cached vessel data, use it (this is much faster!)
+        if ( $cached_vessels !== false && is_array( $cached_vessels ) && ! empty( $cached_vessels ) ) {
+            // Filter vessels based on shortcode attributes
+            $filtered_vessels = $cached_vessels;
+            if ( $atts['price_min'] !== '' || $atts['price_max'] !== '' || $atts['year_min'] !== '' || $atts['year_max'] !== '' || $atts['loa_min'] !== '' || $atts['loa_max'] !== '' ) {
+                $filtered_vessels = array();
+                foreach ( $cached_vessels as $vessel ) {
+                    $price = ! empty( $vessel['price_usd'] ) ? floatval( $vessel['price_usd'] ) : null;
+                    $year  = ! empty( $vessel['year'] ) ? intval( $vessel['year'] ) : null;
+                    $loa   = ! empty( $vessel['loa_feet'] ) ? floatval( $vessel['loa_feet'] ) : null;
+                    
+                    $price_min = ! empty( $atts['price_min'] ) && $atts['price_min'] !== '0' ? floatval( $atts['price_min'] ) : '';
+                    $price_max = ! empty( $atts['price_max'] ) && $atts['price_max'] !== '0' ? floatval( $atts['price_max'] ) : '';
+                    $year_min  = ! empty( $atts['year_min'] ) && $atts['year_min'] !== '0' ? intval( $atts['year_min'] ) : '';
+                    $year_max  = ! empty( $atts['year_max'] ) && $atts['year_max'] !== '0' ? intval( $atts['year_max'] ) : '';
+                    $loa_min   = ! empty( $atts['loa_min'] ) && $atts['loa_min'] !== '0' ? floatval( $atts['loa_min'] ) : '';
+                    $loa_max   = ! empty( $atts['loa_max'] ) && $atts['loa_max'] !== '0' ? floatval( $atts['loa_max'] ) : '';
+                    
+                    if ( $price_min !== '' && ( is_null( $price ) || $price <= 0 || $price < $price_min ) ) {
+                        continue;
+                    }
+                    if ( $price_max !== '' && ( is_null( $price ) || $price <= 0 || $price > $price_max ) ) {
+                        continue;
+                    }
+                    if ( $year_min !== '' && ( is_null( $year ) || $year <= 0 || $year < $year_min ) ) {
+                        continue;
+                    }
+                    if ( $year_max !== '' && ( is_null( $year ) || $year <= 0 || $year > $year_max ) ) {
+                        continue;
+                    }
+                    if ( $loa_min !== '' && ( is_null( $loa ) || $loa <= 0 || $loa < $loa_min ) ) {
+                        continue;
+                    }
+                    if ( $loa_max !== '' && ( is_null( $loa ) || $loa <= 0 || $loa > $loa_max ) ) {
+                        continue;
+                    }
+                    $filtered_vessels[] = $vessel;
+                }
+            }
+            
+            // Use cached data - generate HTML from cached vessels (fast!)
+            $builders = $cached_builders !== false ? $cached_builders : array();
+            $categories = $cached_categories !== false ? $cached_categories : array();
+            $types = $cached_types !== false ? $cached_types : array();
+            $conditions = $cached_conditions !== false ? $cached_conditions : array();
+            
+            return yatco_generate_vessels_html_from_data( $filtered_vessels, $builders, $categories, $types, $conditions, $atts );
+        }
+        
+        // Fallback to full cached HTML output
+        $cached = get_transient( $cache_key );
         if ( $cached !== false ) {
             return $cached;
         }
