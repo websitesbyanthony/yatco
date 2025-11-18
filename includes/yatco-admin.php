@@ -280,13 +280,21 @@ function yatco_options_page() {
             echo '</div>';
             echo '<p style="margin-top: 10px; font-size: 12px; color: #666;"><em>🟢 Live updates every 2 seconds. Progress will appear once the first batch (20 vessels) is processed.</em></p>';
             
-            // Add manual trigger button if stuck
-            if ( $is_warming_scheduled ) {
+            // Add manual trigger buttons if stuck
+            if ( $is_warming_scheduled || ! $cache_progress ) {
                 $scheduled_time = wp_next_scheduled( 'yatco_warm_cache_hook' );
                 $time_since_scheduled = $scheduled_time ? ( time() - $scheduled_time ) : 0;
                 
                 if ( $time_since_scheduled > 60 && ! $cache_progress && ! $cache_status ) {
-                    echo '<p style="margin-top: 10px;"><button type="button" id="yatco-force-trigger" class="button button-secondary" onclick="yatcoForceTriggerWarming()">Force Start Warming</button> <span style="color: #dc3232; font-size: 12px;">(If progress hasn\'t appeared after 1 minute)</span></p>';
+                    echo '<div style="margin-top: 15px; padding: 15px; background: #fff3cd; border-left: 4px solid #ffc107; border-radius: 4px;">';
+                    echo '<p style="margin: 0 0 10px 0;"><strong>⚠️ Progress not detected</strong></p>';
+                    echo '<p style="margin: 0 0 10px 0; font-size: 13px;">WP-Cron may not be enabled on your server. Try one of these options:</p>';
+                    echo '<p style="margin: 0;">';
+                    echo '<button type="button" id="yatco-force-trigger" class="button button-secondary" onclick="yatcoForceTriggerWarming()" style="margin-right: 10px;">Try WP-Cron Trigger</button>';
+                    echo '<button type="button" id="yatco-direct-trigger" class="button button-primary" onclick="yatcoRunDirectWarming()">Run Directly (Recommended)</button>';
+                    echo '</p>';
+                    echo '<p style="margin: 10px 0 0 0; font-size: 12px; color: #666;"><em>The "Run Directly" option will start cache warming immediately without relying on WP-Cron.</em></p>';
+                    echo '</div>';
                 }
             }
             
@@ -352,7 +360,7 @@ function yatco_options_page() {
         ?>
         <script>
         (function() {
-            // Force trigger cache warming
+            // Force trigger cache warming via WP-Cron
             window.yatcoForceTriggerWarming = function() {
                 const btn = document.getElementById('yatco-force-trigger');
                 if (btn) {
@@ -381,17 +389,66 @@ function yatco_options_page() {
                         alert('Error: ' + (data.data && data.data.message ? data.data.message : 'Unknown error'));
                         if (btn) {
                             btn.disabled = false;
-                            btn.textContent = 'Force Start Warming';
+                            btn.textContent = 'Try WP-Cron Trigger';
                         }
                     }
                 })
                 .catch(error => {
                     console.error('Error triggering warming:', error);
-                    alert('Error triggering cache warming. Please try clicking "Warm Cache" button again.');
+                    alert('Error triggering cache warming. Try "Run Directly" instead.');
                     if (btn) {
                         btn.disabled = false;
-                        btn.textContent = 'Force Start Warming';
+                        btn.textContent = 'Try WP-Cron Trigger';
                     }
+                });
+            };
+            
+            // Run cache warming directly (bypasses WP-Cron)
+            window.yatcoRunDirectWarming = function() {
+                const btn = document.getElementById('yatco-direct-trigger');
+                if (btn) {
+                    btn.disabled = true;
+                    btn.textContent = 'Starting... Please wait...';
+                }
+                
+                // Update status immediately
+                const statusEl = document.querySelector('.yatco-cache-status');
+                if (statusEl) {
+                    statusEl.innerHTML = '<strong>Status:</strong> Starting cache warm-up directly...';
+                }
+                
+                fetch('<?php echo admin_url( 'admin-ajax.php' ); ?>', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
+                    body: 'action=yatco_run_cache_warming_direct&nonce=<?php echo wp_create_nonce( 'yatco_run_warming_direct' ); ?>',
+                    timeout: 30000
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        if (btn) {
+                            btn.textContent = 'Started! Refreshing...';
+                        }
+                        // Reload after 3 seconds to show progress
+                        setTimeout(function() {
+                            window.location.reload();
+                        }, 3000);
+                    } else {
+                        alert('Error: ' + (data.data && data.data.message ? data.data.message : 'Unknown error'));
+                        if (btn) {
+                            btn.disabled = false;
+                            btn.textContent = 'Run Directly (Recommended)';
+                        }
+                    }
+                })
+                .catch(error => {
+                    console.error('Error running warming directly:', error);
+                    // Even if error, try reloading as it might have started
+                    alert('Request timeout - cache warming may have started. Refreshing page...');
+                    window.location.reload();
                 });
             };
             
@@ -545,17 +602,62 @@ function yatco_ajax_trigger_cache_warming() {
         set_transient( 'yatco_cache_warming_status', 'Starting cache warm-up...', 600 );
     }
     
-    // Trigger cache warming function
+    // Trigger cache warming function directly (not via WP-Cron)
     if ( function_exists( 'yatco_warm_cache_function' ) ) {
-        // Run in background by scheduling cron and spawning
+        // Schedule cron as backup, but also try to trigger directly
         wp_schedule_single_event( time(), 'yatco_warm_cache_hook' );
         spawn_cron();
-        wp_send_json_success( array( 'message' => 'Cache warming triggered' ) );
+        
+        // Also trigger directly in a separate request to ensure it runs
+        wp_remote_post(
+            site_url( 'wp-cron.php?doing_wp_cron' ),
+            array(
+                'timeout'   => 0.01,
+                'blocking'  => false,
+                'sslverify' => false,
+            )
+        );
+        
+        wp_send_json_success( array( 'message' => 'Cache warming triggered. If progress doesn\'t appear, WP-Cron may be disabled on your server.' ) );
     } else {
         wp_send_json_error( array( 'message' => 'Function not found' ) );
     }
 }
+
+/**
+ * AJAX handler to run cache warming directly (synchronous - for testing).
+ */
+function yatco_ajax_run_cache_warming_direct() {
+    check_ajax_referer( 'yatco_run_warming_direct', 'nonce' );
+    
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( array( 'message' => 'Unauthorized' ) );
+        return;
+    }
+    
+    // Set initial status
+    if ( function_exists( 'set_transient' ) ) {
+        set_transient( 'yatco_cache_warming_status', 'Starting cache warm-up directly...', 600 );
+    }
+    
+    // Run the function directly
+    if ( function_exists( 'yatco_warm_cache_function' ) ) {
+        // Increase execution limits
+        @ini_set( 'max_execution_time', 300 ); // 5 minutes
+        @ini_set( 'memory_limit', '512M' );
+        @set_time_limit( 300 );
+        
+        // Run first batch synchronously to get progress started
+        yatco_warm_cache_function();
+        
+        wp_send_json_success( array( 'message' => 'Cache warming started directly. Progress should appear shortly.' ) );
+    } else {
+        wp_send_json_error( array( 'message' => 'Function not found' ) );
+    }
+}
+
 add_action( 'wp_ajax_yatco_trigger_cache_warming', 'yatco_ajax_trigger_cache_warming' );
+add_action( 'wp_ajax_yatco_run_cache_warming_direct', 'yatco_ajax_run_cache_warming_direct' );
 
 /**
  * AJAX handler for cache warming status (auto-refresh).
