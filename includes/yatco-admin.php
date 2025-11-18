@@ -263,23 +263,21 @@ function yatco_options_page() {
         
         // Add CSS animations
         echo '<style>
-                @keyframes yatco-pulse {
-                    0%, 100% { opacity: 1; transform: scale(1); }
-                    50% { opacity: 0.5; transform: scale(1.2); }
-                }
-                @keyframes yatco-progress-shimmer {
-                    0% { background-position: -200% 0; }
-                    100% { background-position: 200% 0; }
-                }
-                .yatco-progress-bar-fill {
-                    animation: yatco-progress-shimmer 2s infinite linear;
-                }
-                .yatco-live-progress-container {
-                    border-left: 4px solid #ffc107;
-                }
-                </style>';
-            }
+        @keyframes yatco-pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(1.2); }
         }
+        @keyframes yatco-progress-shimmer {
+            0% { background-position: -200% 0; }
+            100% { background-position: 200% 0; }
+        }
+        .yatco-progress-bar-fill {
+            animation: yatco-progress-shimmer 2s infinite linear;
+        }
+        .yatco-live-progress-container {
+            border-left: 4px solid #ffc107;
+        }
+        </style>';
         
         echo '</div>';
     }
