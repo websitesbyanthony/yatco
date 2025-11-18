@@ -144,6 +144,10 @@ function yatco_options_page() {
         } else {
             // Clear any existing progress to start fresh
             delete_transient( 'yatco_cache_warming_progress' );
+            delete_transient( 'yatco_cache_warming_status' );
+            
+            // Set initial status immediately so user sees feedback
+            update_transient( 'yatco_cache_warming_status', 'Starting cache warm-up...', 600 );
             
             // Trigger async cache warming via WP-Cron
             wp_schedule_single_event( time(), 'yatco_warm_cache_hook' );
@@ -151,8 +155,23 @@ function yatco_options_page() {
             // Also trigger immediately in background (non-blocking)
             spawn_cron();
             
+            // Try to trigger directly via HTTP request (non-blocking)
+            wp_remote_post(
+                admin_url( 'admin-ajax.php' ),
+                array(
+                    'timeout'   => 0.01,
+                    'blocking'  => false,
+                    'sslverify' => false,
+                    'body'      => array(
+                        'action' => 'yatco_trigger_cache_warming',
+                        'nonce'  => wp_create_nonce( 'yatco_trigger_warming' ),
+                    ),
+                )
+            );
+            
             echo '<div class="notice notice-info"><p><strong>Cache warming started!</strong> This will run in the background and may take several minutes for 7000+ vessels.</p>';
-            echo '<p>The system processes vessels in batches of 20 to prevent timeouts. Progress is saved automatically, so if interrupted, it will resume from where it left off.</p></div>';
+            echo '<p>The system processes vessels in batches of 20 to prevent timeouts. Progress is saved automatically, so if interrupted, it will resume from where it left off.</p>';
+            echo '<p><em>Note: If progress doesn\'t appear within 30 seconds, try clicking "Warm Cache" again or check if WP-Cron is enabled on your server.</em></p></div>';
         }
     }
     
@@ -258,6 +277,17 @@ function yatco_options_page() {
             echo '<div class="yatco-progress-bar-fill" style="width: 0%; background: linear-gradient(90deg, #0073aa 0%, #005a87 50%, #0073aa 100%); background-size: 200% 100%; height: 100%; transition: width 0.5s ease; display: flex; align-items: center; justify-content: center; color: white; font-weight: 700; font-size: 13px; text-shadow: 0 1px 2px rgba(0,0,0,0.3); animation: yatco-progress-shimmer 2s infinite;">0%</div>';
             echo '</div>';
             echo '<p style="margin-top: 10px; font-size: 12px; color: #666;"><em>🟢 Live updates every 2 seconds. Progress will appear once the first batch (20 vessels) is processed.</em></p>';
+            
+            // Add manual trigger button if stuck
+            if ( $is_warming_scheduled ) {
+                $scheduled_time = wp_next_scheduled( 'yatco_warm_cache_hook' );
+                $time_since_scheduled = $scheduled_time ? ( time() - $scheduled_time ) : 0;
+                
+                if ( $time_since_scheduled > 60 && ! $cache_progress && ! $cache_status ) {
+                    echo '<p style="margin-top: 10px;"><button type="button" id="yatco-force-trigger" class="button button-secondary" onclick="yatcoForceTriggerWarming()">Force Start Warming</button> <span style="color: #dc3232; font-size: 12px;">(If progress hasn\'t appeared after 1 minute)</span></p>';
+                }
+            }
+            
             echo '</div>';
         }
         
@@ -320,6 +350,49 @@ function yatco_options_page() {
         ?>
         <script>
         (function() {
+            // Force trigger cache warming
+            window.yatcoForceTriggerWarming = function() {
+                const btn = document.getElementById('yatco-force-trigger');
+                if (btn) {
+                    btn.disabled = true;
+                    btn.textContent = 'Triggering...';
+                }
+                
+                fetch('<?php echo admin_url( 'admin-ajax.php' ); ?>', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
+                    body: 'action=yatco_trigger_cache_warming&nonce=<?php echo wp_create_nonce( 'yatco_trigger_warming' ); ?>'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        if (btn) {
+                            btn.textContent = 'Triggered! Refreshing...';
+                        }
+                        setTimeout(function() {
+                            window.location.reload();
+                        }, 2000);
+                    } else {
+                        alert('Error: ' + (data.data && data.data.message ? data.data.message : 'Unknown error'));
+                        if (btn) {
+                            btn.disabled = false;
+                            btn.textContent = 'Force Start Warming';
+                        }
+                    }
+                })
+                .catch(error => {
+                    console.error('Error triggering warming:', error);
+                    alert('Error triggering cache warming. Please try clicking "Warm Cache" button again.');
+                    if (btn) {
+                        btn.disabled = false;
+                        btn.textContent = 'Force Start Warming';
+                    }
+                });
+            };
+            
             // Smooth number animation helper
             function animateValue(element, start, end, duration) {
                 if (start === end || !element) return;
@@ -453,6 +526,32 @@ function yatco_options_page() {
     
     echo '</div>';
 }
+
+/**
+ * AJAX handler to manually trigger cache warming.
+ */
+function yatco_ajax_trigger_cache_warming() {
+    check_ajax_referer( 'yatco_trigger_warming', 'nonce' );
+    
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( array( 'message' => 'Unauthorized' ) );
+        return;
+    }
+    
+    // Set initial status
+    update_transient( 'yatco_cache_warming_status', 'Starting cache warm-up...', 600 );
+    
+    // Trigger cache warming function
+    if ( function_exists( 'yatco_warm_cache_function' ) ) {
+        // Run in background by scheduling cron and spawning
+        wp_schedule_single_event( time(), 'yatco_warm_cache_hook' );
+        spawn_cron();
+        wp_send_json_success( array( 'message' => 'Cache warming triggered' ) );
+    } else {
+        wp_send_json_error( array( 'message' => 'Function not found' ) );
+    }
+}
+add_action( 'wp_ajax_yatco_trigger_cache_warming', 'yatco_ajax_trigger_cache_warming' );
 
 /**
  * AJAX handler for cache warming status (auto-refresh).
