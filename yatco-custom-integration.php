@@ -179,17 +179,63 @@ function yatco_options_page() {
         if ( empty( $token ) ) {
             echo '<div class="notice notice-error"><p>Missing token. Please configure your API token first.</p></div>';
         } else {
-            // Trigger async cache warming
+            // Clear any existing progress to start fresh
+            delete_transient( 'yatco_cache_warming_progress' );
+            
+            // Trigger async cache warming via WP-Cron
             wp_schedule_single_event( time(), 'yatco_warm_cache_hook' );
-            echo '<div class="notice notice-info"><p>Cache warming started in the background. This may take several minutes. The cache will be ready shortly.</p></div>';
+            
+            // Also trigger immediately in background (non-blocking)
+            spawn_cron();
+            
+            echo '<div class="notice notice-info"><p><strong>Cache warming started!</strong> This will run in the background and may take several minutes for 7000+ vessels.</p>';
+            echo '<p>The system processes vessels in batches of 50 to prevent timeouts. Progress is saved automatically, so if interrupted, it will resume from where it left off.</p></div>';
         }
+    }
+    
+    // Handle clear cache action
+    if ( isset( $_POST['yatco_clear_cache'] ) && check_admin_referer( 'yatco_clear_cache', 'yatco_clear_cache_nonce' ) ) {
+        delete_transient( 'yatco_vessels_data' );
+        delete_transient( 'yatco_vessels_builders' );
+        delete_transient( 'yatco_vessels_categories' );
+        delete_transient( 'yatco_vessels_types' );
+        delete_transient( 'yatco_vessels_conditions' );
+        delete_transient( 'yatco_cache_warming_progress' );
+        delete_transient( 'yatco_vessels_processing_progress' );
+        
+        // Clear all cached vessel outputs
+        global $wpdb;
+        $wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_name LIKE '_transient_yatco_vessels_%'" );
+        $wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_name LIKE '_transient_timeout_yatco_vessels_%'" );
+        
+        echo '<div class="notice notice-success"><p>Cache cleared successfully!</p></div>';
     }
 
     // Check if cache warming is in progress
     $cache_status = get_transient( 'yatco_cache_warming_status' );
+    $cache_progress = get_transient( 'yatco_cache_warming_progress' );
+    
     if ( $cache_status ) {
-        echo '<div class="notice notice-info"><p>Cache Status: ' . esc_html( $cache_status ) . '</p></div>';
+        echo '<div class="notice notice-info"><p><strong>Cache Status:</strong> ' . esc_html( $cache_status ) . '</p></div>';
     }
+    
+    if ( $cache_progress && is_array( $cache_progress ) ) {
+        $progress_info = $cache_progress;
+        $last_processed = isset( $progress_info['last_processed'] ) ? intval( $progress_info['last_processed'] ) : 0;
+        $total = isset( $progress_info['total'] ) ? intval( $progress_info['total'] ) : 0;
+        $cached = isset( $progress_info['processed'] ) ? intval( $progress_info['processed'] ) : 0;
+        if ( $total > 0 ) {
+            $percent = round( ( $last_processed / $total ) * 100, 1 );
+            echo '<div class="notice notice-warning"><p><strong>Progress:</strong> Processed ' . number_format( $last_processed ) . ' of ' . number_format( $total ) . ' vessels (' . $percent . '%). ' . number_format( $cached ) . ' vessels cached so far.</p>';
+            echo '<p>If the process was interrupted, it will resume from where it left off on the next run.</p></div>';
+        }
+    }
+    
+    // Clear cache button
+    echo '<form method="post" style="margin-top: 10px;">';
+    wp_nonce_field( 'yatco_clear_cache', 'yatco_clear_cache_nonce' );
+    submit_button( 'Clear Cache', 'secondary', 'yatco_clear_cache' );
+    echo '</form>';
 
     echo '</div>';
 }
@@ -920,20 +966,68 @@ function yatco_vessels_shortcode( $atts ) {
     $loa_max   = ! empty( $atts['loa_max'] ) && $atts['loa_max'] !== '0' ? floatval( $atts['loa_max'] ) : '';
 
     // Process ALL vessel IDs to make all 7000+ vessels searchable/filterable
-    // Note: For large datasets (7000+), this may take time. Consider increasing PHP max_execution_time.
+    // Note: For large datasets (7000+), this may take time. We use batch processing to prevent timeouts.
     $vessel_count = count( $ids );
     $processed = 0;
     $error_count = 0;
     
-    // Reset execution time limit for large datasets (300 seconds = 5 minutes)
-    @set_time_limit( 300 );
+    // Increase limits to handle large datasets
+    @ini_set( 'max_execution_time', 0 ); // Unlimited (or very high)
+    @ini_set( 'memory_limit', '512M' ); // Increase memory limit
+    @set_time_limit( 0 ); // Remove time limit
     
-    foreach ( $ids as $id ) {
+    // Check if we have partially cached data from a previous run
+    $cache_key_progress = 'yatco_vessels_processing_progress';
+    $progress = get_transient( $cache_key_progress );
+    $start_from = 0;
+    $cached_partial = array();
+    
+    if ( $progress !== false && is_array( $progress ) ) {
+        $start_from = isset( $progress['last_processed'] ) ? intval( $progress['last_processed'] ) : 0;
+        $cached_partial = isset( $progress['vessels'] ) && is_array( $progress['vessels'] ) ? $progress['vessels'] : array();
+        // Continue from where we left off
+        $ids = array_slice( $ids, $start_from );
+        $vessels = $cached_partial;
+    } else {
+        $vessels = array();
+    }
+    
+    // Process in batches to avoid memory issues
+    $batch_size = 50; // Process 50 at a time
+    $total_to_process = count( $ids );
+    $batch_num = 0;
+    
+    foreach ( $ids as $index => $id ) {
         $processed++;
+        $actual_index = $start_from + $index;
         
-        // Reset execution time every 100 vessels to avoid timeout
-        if ( $processed % 100 === 0 ) {
-            @set_time_limit( 300 ); // Reset execution time
+        // Save progress every batch to prevent data loss
+        if ( $processed % $batch_size === 0 ) {
+            $batch_num++;
+            
+            // Save progress so we can resume if interrupted
+            $progress_data = array(
+                'last_processed' => $actual_index,
+                'total'         => $vessel_count,
+                'processed'     => count( $vessels ),
+                'vessels'       => $vessels,
+                'timestamp'     => time(),
+            );
+            set_transient( $cache_key_progress, $progress_data, 3600 ); // Save for 1 hour
+            
+            // Reset execution time and flush output to prevent timeout
+            @set_time_limit( 0 );
+            if ( function_exists( 'fastcgi_finish_request' ) ) {
+                @fastcgi_finish_request();
+            }
+            
+            // Optional: Add a small delay to reduce server load
+            usleep( 100000 ); // 0.1 second delay
+        }
+        
+        // Reset execution time periodically
+        if ( $processed % 10 === 0 ) {
+            @set_time_limit( 0 );
         }
 
         $full = yatco_fetch_fullspecs( $token, $id );
@@ -1049,6 +1143,9 @@ function yatco_vessels_shortcode( $atts ) {
     sort( $categories );
     sort( $types );
     sort( $conditions );
+
+    // Clear progress after successful completion
+    delete_transient( $cache_key_progress );
 
     if ( empty( $vessels ) ) {
         $output = '<p>No vessels match your criteria.</p>';
@@ -1851,7 +1948,258 @@ function yatco_vessels_shortcode( $atts ) {
     // Cache the output if enabled.
     if ( $atts['cache'] === 'yes' && isset( $cache_duration ) ) {
         set_transient( $cache_key, $output, $cache_duration * MINUTE_IN_SECONDS );
+        
+        // Also cache vessel data separately for faster future loads
+        set_transient( 'yatco_vessels_data', $vessels, $cache_duration * MINUTE_IN_SECONDS );
+        set_transient( 'yatco_vessels_builders', $builders, $cache_duration * MINUTE_IN_SECONDS );
+        set_transient( 'yatco_vessels_categories', $categories, $cache_duration * MINUTE_IN_SECONDS );
+        set_transient( 'yatco_vessels_types', $types, $cache_duration * MINUTE_IN_SECONDS );
+        set_transient( 'yatco_vessels_conditions', $conditions, $cache_duration * MINUTE_IN_SECONDS );
     }
 
     return $output;
 }
+
+/**
+ * Warm cache function - pre-loads all vessels into cache.
+ * This runs in the background via WP-Cron.
+ */
+function yatco_warm_cache_function() {
+    update_transient( 'yatco_cache_warming_status', 'Starting cache warm-up...', 600 );
+    
+    $token = yatco_get_token();
+    if ( empty( $token ) ) {
+        update_transient( 'yatco_cache_warming_status', 'Error: API token not configured', 60 );
+        return;
+    }
+
+    // Use default shortcode attributes
+    $atts = array(
+        'max'           => '999999',
+        'price_min'     => '',
+        'price_max'     => '',
+        'year_min'      => '',
+        'year_max'      => '',
+        'loa_min'       => '',
+        'loa_max'       => '',
+        'columns'       => '3',
+        'show_price'    => 'yes',
+        'show_year'     => 'yes',
+        'show_loa'      => 'yes',
+        'cache'         => 'no', // Don't check cache when warming
+        'show_filters'  => 'yes',
+        'currency'      => 'USD',
+        'length_unit'   => 'FT',
+    );
+
+    update_transient( 'yatco_cache_warming_status', 'Fetching vessel IDs...', 600 );
+    
+    // Increase limits for cache warming
+    @ini_set( 'max_execution_time', 0 ); // Unlimited
+    @ini_set( 'memory_limit', '512M' ); // Increase memory
+    @set_time_limit( 0 ); // Remove time limit
+    
+    // Fetch all vessel IDs
+    $ids = yatco_get_active_vessel_ids( $token, 0 );
+    
+    if ( is_wp_error( $ids ) ) {
+        update_transient( 'yatco_cache_warming_status', 'Error: ' . $ids->get_error_message(), 60 );
+        return;
+    }
+
+    $vessel_count = count( $ids );
+    update_transient( 'yatco_cache_warming_status', "Processing {$vessel_count} vessels...", 600 );
+
+    // Check for partial progress
+    $cache_key_progress = 'yatco_cache_warming_progress';
+    $progress = get_transient( $cache_key_progress );
+    $start_from = 0;
+    $cached_partial = array();
+    
+    if ( $progress !== false && is_array( $progress ) ) {
+        $start_from = isset( $progress['last_processed'] ) ? intval( $progress['last_processed'] ) : 0;
+        $cached_partial = isset( $progress['vessels'] ) && is_array( $progress['vessels'] ) ? $progress['vessels'] : array();
+        $ids = array_slice( $ids, $start_from );
+        $vessels = $cached_partial;
+    } else {
+        $vessels = array();
+    }
+    
+    $batch_size = 50; // Process 50 at a time
+    $processed = 0;
+    $errors = 0;
+    $batch_num = 0;
+
+    foreach ( $ids as $index => $id ) {
+        $processed++;
+        $actual_index = $start_from + $index;
+        
+        // Save progress every batch
+        if ( $processed % $batch_size === 0 ) {
+            $batch_num++;
+            
+            // Save progress
+            $progress_data = array(
+                'last_processed' => $actual_index,
+                'total'         => $vessel_count,
+                'processed'     => count( $vessels ),
+                'vessels'       => $vessels,
+                'timestamp'     => time(),
+            );
+            set_transient( $cache_key_progress, $progress_data, 3600 );
+            
+            // Update status
+            $percent = round( ( $actual_index / $vessel_count ) * 100, 1 );
+            update_transient( 'yatco_cache_warming_status', "Processing vessel {$actual_index} of {$vessel_count} ({$percent}%)...", 600 );
+            
+            // Reset execution time and flush
+            @set_time_limit( 0 );
+            if ( function_exists( 'fastcgi_finish_request' ) ) {
+                @fastcgi_finish_request();
+            }
+            
+            // Small delay to reduce server load
+            usleep( 100000 ); // 0.1 second
+        }
+        
+        // Reset execution time periodically
+        if ( $processed % 10 === 0 ) {
+            @set_time_limit( 0 );
+        }
+
+        $full = yatco_fetch_fullspecs( $token, $id );
+        if ( is_wp_error( $full ) ) {
+            $errors++;
+            continue;
+        }
+
+        $brief = yatco_build_brief_from_fullspecs( $id, $full );
+
+        // Get full specs for display
+        $result = isset( $full['Result'] ) ? $full['Result'] : array();
+        $basic  = isset( $full['BasicInfo'] ) ? $full['BasicInfo'] : array();
+        
+        // Get builder, category, type, condition
+        $builder = isset( $basic['Builder'] ) ? $basic['Builder'] : ( isset( $result['BuilderName'] ) ? $result['BuilderName'] : '' );
+        $category = isset( $basic['MainCategory'] ) ? $basic['MainCategory'] : ( isset( $result['MainCategoryText'] ) ? $result['MainCategoryText'] : '' );
+        $type = isset( $basic['VesselTypeText'] ) ? $basic['VesselTypeText'] : ( isset( $result['VesselTypeText'] ) ? $result['VesselTypeText'] : '' );
+        $condition = isset( $result['VesselCondition'] ) ? $result['VesselCondition'] : '';
+        $state_rooms = isset( $basic['StateRooms'] ) ? intval( $basic['StateRooms'] ) : ( isset( $result['StateRooms'] ) ? intval( $result['StateRooms'] ) : 0 );
+        $location = isset( $basic['LocationCustom'] ) ? $basic['LocationCustom'] : '';
+        
+        // Get LOA in feet and meters
+        $loa_feet = isset( $result['LOAFeet'] ) && $result['LOAFeet'] > 0 ? floatval( $result['LOAFeet'] ) : null;
+        $loa_meters = isset( $result['LOAMeters'] ) && $result['LOAMeters'] > 0 ? floatval( $result['LOAMeters'] ) : null;
+        if ( ! $loa_meters && $loa_feet ) {
+            $loa_meters = $loa_feet * 0.3048;
+        }
+        
+        // Get price in USD and EUR
+        $price_usd = isset( $basic['AskingPriceUSD'] ) && $basic['AskingPriceUSD'] > 0 ? floatval( $basic['AskingPriceUSD'] ) : null;
+        if ( ! $price_usd && isset( $result['AskingPriceCompare'] ) && $result['AskingPriceCompare'] > 0 ) {
+            $price_usd = floatval( $result['AskingPriceCompare'] );
+        }
+        
+        $price_eur = isset( $basic['AskingPrice'] ) && $basic['AskingPrice'] > 0 && isset( $basic['Currency'] ) && $basic['Currency'] === 'EUR' ? floatval( $basic['AskingPrice'] ) : null;
+        
+        $vessel_data = array(
+            'id'          => $id,
+            'name'        => $brief['Name'],
+            'price'       => $brief['Price'],
+            'price_usd'   => $price_usd,
+            'price_eur'   => $price_eur,
+            'year'        => $brief['Year'],
+            'loa'         => $brief['LOA'],
+            'loa_feet'    => $loa_feet,
+            'loa_meters'  => $loa_meters,
+            'builder'     => $builder,
+            'category'    => $category,
+            'type'        => $type,
+            'condition'   => $condition,
+            'state_rooms' => $state_rooms,
+            'location'    => $location,
+            'image'       => isset( $result['MainPhotoUrl'] ) ? $result['MainPhotoUrl'] : ( isset( $basic['MainPhotoURL'] ) ? $basic['MainPhotoURL'] : '' ),
+            'link'        => get_post_type_archive_link( 'yacht' ) . '?vessel_id=' . $id,
+        );
+
+        $vessels[] = $vessel_data;
+    }
+
+    // Collect unique values for filter dropdowns
+    $builders = array();
+    $categories = array();
+    $types = array();
+    $conditions = array();
+    
+    foreach ( $vessels as $vessel ) {
+        if ( ! empty( $vessel['builder'] ) && ! in_array( $vessel['builder'], $builders ) ) {
+            $builders[] = $vessel['builder'];
+        }
+        if ( ! empty( $vessel['category'] ) && ! in_array( $vessel['category'], $categories ) ) {
+            $categories[] = $vessel['category'];
+        }
+        if ( ! empty( $vessel['type'] ) && ! in_array( $vessel['type'], $types ) ) {
+            $types[] = $vessel['type'];
+        }
+        if ( ! empty( $vessel['condition'] ) && ! in_array( $vessel['condition'], $conditions ) ) {
+            $conditions[] = $vessel['condition'];
+        }
+    }
+    sort( $builders );
+    sort( $categories );
+    sort( $types );
+    sort( $conditions );
+
+    // Get options for cache duration
+    $options = get_option( 'yatco_api_settings' );
+    $cache_duration = isset( $options['yatco_cache_duration'] ) ? intval( $options['yatco_cache_duration'] ) : 30;
+    
+    // Cache vessel data for fast retrieval
+    set_transient( 'yatco_vessels_data', $vessels, $cache_duration * MINUTE_IN_SECONDS );
+    set_transient( 'yatco_vessels_builders', $builders, $cache_duration * MINUTE_IN_SECONDS );
+    set_transient( 'yatco_vessels_categories', $categories, $cache_duration * MINUTE_IN_SECONDS );
+    set_transient( 'yatco_vessels_types', $types, $cache_duration * MINUTE_IN_SECONDS );
+    set_transient( 'yatco_vessels_conditions', $conditions, $cache_duration * MINUTE_IN_SECONDS );
+    
+    // Clear progress after successful completion
+    delete_transient( $cache_key_progress );
+    
+    $total_processed = count( $vessels );
+    $success_msg = "Cache warmed successfully! Processed {$total_processed} vessels";
+    if ( $errors > 0 ) {
+        $success_msg .= " ({$errors} errors)";
+    }
+    update_transient( 'yatco_cache_warming_status', $success_msg, 300 );
+}
+
+/**
+ * Schedule periodic cache refresh if enabled.
+ */
+function yatco_maybe_schedule_cache_refresh() {
+    $options = get_option( 'yatco_api_settings' );
+    $auto_refresh = isset( $options['yatco_auto_refresh_cache'] ) && $options['yatco_auto_refresh_cache'] === 'yes';
+    
+    if ( $auto_refresh ) {
+        if ( ! wp_next_scheduled( 'yatco_auto_refresh_cache_hook' ) ) {
+            wp_schedule_event( time(), 'yatco_six_hours', 'yatco_auto_refresh_cache_hook' );
+        }
+    } else {
+        $timestamp = wp_next_scheduled( 'yatco_auto_refresh_cache_hook' );
+        if ( $timestamp ) {
+            wp_unschedule_event( $timestamp, 'yatco_auto_refresh_cache_hook' );
+        }
+    }
+}
+
+// Register custom cron schedule for 6 hours
+add_filter( 'cron_schedules', 'yatco_add_six_hour_schedule' );
+function yatco_add_six_hour_schedule( $schedules ) {
+    $schedules['yatco_six_hours'] = array(
+        'interval' => 21600, // 6 hours in seconds
+        'display'  => 'Every 6 Hours',
+    );
+    return $schedules;
+}
+
+// Hook for auto-refresh
+add_action( 'yatco_auto_refresh_cache_hook', 'yatco_warm_cache_function' );
