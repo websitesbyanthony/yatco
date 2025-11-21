@@ -157,7 +157,46 @@ function yatco_options_page() {
     $cache_status = get_transient( 'yatco_cache_warming_status' );
     $cache_progress = get_transient( 'yatco_cache_warming_progress' );
     $is_warming_scheduled = wp_next_scheduled( 'yatco_warm_cache_hook' );
-    $is_running = ( $cache_status !== false ) || ( $cache_progress !== false ) || $is_warming_scheduled;
+    
+    // Only consider running if there's actual active progress or scheduled event
+    // Check for meaningful progress data (active import happening)
+    // Status messages can persist after completion, so we check progress data instead
+    $has_active_progress = false;
+    if ( $cache_progress !== false && is_array( $cache_progress ) && ! empty( $cache_progress ) ) {
+        $last_processed = isset( $cache_progress['last_processed'] ) ? intval( $cache_progress['last_processed'] ) : 0;
+        $total = isset( $cache_progress['total'] ) ? intval( $cache_progress['total'] ) : 0;
+        // Only consider active if there's progress data AND not completed
+        $has_active_progress = ( $total > 0 && $last_processed < $total );
+    }
+    
+    // Check if status indicates active processing (not just completion message)
+    $has_active_status = false;
+    if ( $cache_status !== false && ! empty( $cache_status ) && $cache_status !== 'not_run' ) {
+        $status_lower = strtolower( $cache_status );
+        // Only consider active if status contains indicators of active processing
+        $active_indicators = array( 'starting', 'processing', 'fetching', 'vessel', 'warming', 'import' );
+        $completed_indicators = array( 'completed', 'success', 'successfully', 'finished', 'done' );
+        
+        // Check for active indicators
+        foreach ( $active_indicators as $indicator ) {
+            if ( strpos( $status_lower, $indicator ) !== false ) {
+                // Make sure it's not a completion message
+                $is_completed = false;
+                foreach ( $completed_indicators as $completed ) {
+                    if ( strpos( $status_lower, $completed ) !== false ) {
+                        $is_completed = true;
+                        break;
+                    }
+                }
+                if ( ! $is_completed ) {
+                    $has_active_status = true;
+                    break;
+                }
+            }
+        }
+    }
+    
+    $is_running = $has_active_status || $has_active_progress || $is_warming_scheduled;
     
     // Handle stop import action
     if ( isset( $_POST['yatco_stop_import'] ) && check_admin_referer( 'yatco_stop_import', 'yatco_stop_import_nonce' ) ) {
@@ -508,7 +547,39 @@ function yatco_options_page() {
         $cache_status = get_transient( 'yatco_cache_warming_status' );
         $cache_progress = get_transient( 'yatco_cache_warming_progress' );
         $is_warming_scheduled = wp_next_scheduled( 'yatco_warm_cache_hook' );
-        $is_running = ( $cache_status !== false ) || ( $cache_progress !== false ) || $is_warming_scheduled;
+        
+        // Use same logic as above to determine if running
+        $has_active_progress = false;
+        if ( $cache_progress !== false && is_array( $cache_progress ) && ! empty( $cache_progress ) ) {
+            $last_processed = isset( $cache_progress['last_processed'] ) ? intval( $cache_progress['last_processed'] ) : 0;
+            $total = isset( $cache_progress['total'] ) ? intval( $cache_progress['total'] ) : 0;
+            $has_active_progress = ( $total > 0 && $last_processed < $total );
+        }
+        
+        $has_active_status = false;
+        if ( $cache_status !== false && ! empty( $cache_status ) && $cache_status !== 'not_run' ) {
+            $status_lower = strtolower( $cache_status );
+            $active_indicators = array( 'starting', 'processing', 'fetching', 'vessel', 'warming', 'import' );
+            $completed_indicators = array( 'completed', 'success', 'successfully', 'finished', 'done' );
+            
+            foreach ( $active_indicators as $indicator ) {
+                if ( strpos( $status_lower, $indicator ) !== false ) {
+                    $is_completed = false;
+                    foreach ( $completed_indicators as $completed ) {
+                        if ( strpos( $status_lower, $completed ) !== false ) {
+                            $is_completed = true;
+                            break;
+                        }
+                    }
+                    if ( ! $is_completed ) {
+                        $has_active_status = true;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        $is_running = $has_active_status || $has_active_progress || $is_warming_scheduled;
         
         // Re-display stop button if running
         if ( $is_running ) {
