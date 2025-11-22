@@ -245,30 +245,57 @@ function yatco_options_page() {
     
     echo '<form method="post" style="margin-bottom: 15px;">';
     wp_nonce_field( 'yatco_warm_cache', 'yatco_warm_cache_nonce' );
-    // Only disable if there's actually an active import happening right now
-    // Don't disable just because auto-refresh is scheduled
-    $button_disabled = ( $has_active_status || $has_active_progress ) ? true : false;
+    // Only disable button if there's actually an active import happening right now
+    // Be very strict - default to enabled to avoid stuck states
+    // Only disable if we have BOTH active progress AND it's not completed
+    $button_disabled = false;
+    
+    // Only disable if there's active progress (vessels being processed right now)
+    // AND the progress shows it's not finished
+    if ( $has_active_progress ) {
+        // Double-check progress is actually active (not completed)
+        $last_processed = isset( $cache_progress['last_processed'] ) ? intval( $cache_progress['last_processed'] ) : 0;
+        $total = isset( $cache_progress['total'] ) ? intval( $cache_progress['total'] ) : 0;
+        if ( $total > 0 && $last_processed < $total ) {
+            $button_disabled = true;
+        }
+    }
+    
+    // Don't disable based on status alone - status can be stale
+    // Only check status if we also have progress
+    if ( ! $button_disabled && $has_active_status && $cache_status !== false && $has_active_progress ) {
+        $status_lower = strtolower( $cache_status );
+        if ( strpos( $status_lower, 'starting' ) !== false || 
+             strpos( $status_lower, 'processing' ) !== false || 
+             strpos( $status_lower, 'fetching' ) !== false ) {
+            $button_disabled = true;
+        }
+    }
+    
     submit_button( 'Import All Vessels to CPT', 'primary', 'yatco_warm_cache', false, array( 'disabled' => $button_disabled ) );
     echo '</form>';
     
-    // Show debug info if button is disabled (for troubleshooting)
+    // Always show clear all button if button is disabled (for easy recovery)
     if ( $button_disabled ) {
-        echo '<p style="font-size: 11px; color: #999; margin-top: 5px;">';
-        echo 'Button disabled because: ';
-        $reasons = array();
-        if ( $has_active_status ) $reasons[] = 'Active status detected';
-        if ( $has_active_progress ) $reasons[] = 'Active progress detected';
-        echo implode( ', ', $reasons );
-        echo '</p>';
+        echo '<form method="post" style="margin: 10px 0;">';
+        wp_nonce_field( 'yatco_clear_all', 'yatco_clear_all_nonce' );
+        submit_button( '🔧 Clear All & Enable Button', 'secondary', 'yatco_clear_all', false, array( 'style' => 'background: #ff9800; border-color: #ff9800; color: #fff;' ) );
+        echo '<p style="font-size: 12px; color: #666; margin: 5px 0;">Button is disabled. Click this to clear all status and enable it.</p>';
+        echo '</form>';
         
-        // Show clear all button if button is stuck disabled (no actual active import)
-        if ( ! $has_active_progress && ! $has_active_status ) {
-            echo '<form method="post" style="margin: 10px 0;">';
-            wp_nonce_field( 'yatco_clear_all', 'yatco_clear_all_nonce' );
-            submit_button( '🔧 Clear All & Enable Button', 'secondary', 'yatco_clear_all', false, array( 'style' => 'background: #ff9800; border-color: #ff9800; color: #fff;' ) );
-            echo '<p style="font-size: 12px; color: #666; margin: 5px 0;">If the button is stuck disabled, click this to clear all status and enable it.</p>';
-            echo '</form>';
+        // Show debug info
+        echo '<p style="font-size: 11px; color: #999; margin-top: 5px;">';
+        echo 'Debug: ';
+        $debug_info = array();
+        if ( $cache_status !== false ) $debug_info[] = 'Status: ' . esc_html( substr( $cache_status, 0, 50 ) );
+        if ( $cache_progress !== false ) {
+            $last = isset( $cache_progress['last_processed'] ) ? $cache_progress['last_processed'] : 0;
+            $total = isset( $cache_progress['total'] ) ? $cache_progress['total'] : 0;
+            $debug_info[] = "Progress: {$last}/{$total}";
         }
+        if ( $is_warming_scheduled ) $debug_info[] = 'Scheduled: ' . date( 'Y-m-d H:i:s', $is_warming_scheduled );
+        echo implode( ' | ', $debug_info );
+        echo '</p>';
     }
     
     if ( $is_running ) {
