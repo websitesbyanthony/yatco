@@ -130,20 +130,19 @@ function yatco_options_page() {
     }
 
     echo '<hr />';
-    echo '<h2>Test Single Vessel Data (View Only - No Import)</h2>';
+    echo '<h2>Test Single Vessel & Create Post</h2>';
     echo '<div style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 12px; margin: 15px 0;">';
-    echo '<p style="margin: 0; font-weight: bold; color: #856404;"><strong>⚠️ Important:</strong> This test button <strong>ONLY</strong> fetches and displays data from the YATCO API. It does <strong>NOT</strong> import anything to your Custom Post Type.</p>';
+    echo '<p style="margin: 0; font-weight: bold; color: #856404;"><strong>📝 Test & Import:</strong> This button fetches the first active vessel from the YATCO API, displays its data structure, <strong>and creates a CPT post</strong> so you can preview how the template looks.</p>';
     echo '</div>';
-    echo '<p>This test fetches the first active vessel ID and displays the full <code>FullSpecsAll</code> data so you can see exactly what data structure we\'re getting from the YATCO API.</p>';
+    echo '<p>This is useful for testing the single yacht template before importing all vessels.</p>';
     echo '<form method="post" id="yatco-test-vessel-form" action="' . esc_url( admin_url( 'admin.php?page=yatco' ) ) . '">';
     wp_nonce_field( 'yatco_test_vessel', 'yatco_test_vessel_nonce' );
     // Use a unique button name to avoid conflicts with import buttons
-    submit_button( '🔍 Fetch First Vessel Details (View Only - No Import)', 'secondary', 'yatco_test_vessel_data_only', false, array( 'id' => 'yatco-test-vessel-btn' ) );
+    submit_button( '🔍 Fetch First Vessel & Create Test Post', 'secondary', 'yatco_test_vessel_data_only', false, array( 'id' => 'yatco-test-vessel-btn' ) );
     echo '</form>';
 
     // Check for test vessel button FIRST - handle it immediately and prevent other handlers
-    // IMPORTANT: This is VIEW ONLY - does NOT import anything to CPT
-    // This check MUST come before any import handlers to prevent conflicts
+    // This will fetch vessel data AND create a CPT post for testing
     if ( isset( $_POST['yatco_test_vessel_data_only'] ) && ! empty( $_POST['yatco_test_vessel_data_only'] ) ) {
         // Verify nonce separately
         if ( ! check_admin_referer( 'yatco_test_vessel', 'yatco_test_vessel_nonce' ) ) {
@@ -151,11 +150,9 @@ function yatco_options_page() {
         } elseif ( empty( $token ) ) {
             echo '<div class="notice notice-error"><p>Missing token. Please configure your API token first.</p></div>';
         } else {
-            // This is a TEST ONLY operation - no imports should happen here
-            // Explicitly prevent any import triggers
             echo '<div class="notice notice-info" style="background: #e3f2fd; border-left: 4px solid #2196f3; padding: 12px; margin: 15px 0;">';
-            echo '<p><strong>🔍 Test Mode - View Only</strong></p>';
-            echo '<p>This test fetches and displays data from the YATCO API. <strong>No vessels will be imported to your CPT.</strong> This operation is read-only.</p>';
+            echo '<p><strong>🔍 Test Mode - Fetching & Importing First Vessel</strong></p>';
+            echo '<p>This will fetch vessel data from the YATCO API, display it below, and <strong>create a CPT post</strong> so you can see how the template renders.</p>';
             echo '</div>';
             
             echo '<div style="background: #f9f9f9; border: 1px solid #ddd; border-radius: 4px; padding: 20px; margin: 20px 0;">';
@@ -249,61 +246,82 @@ function yatco_options_page() {
                         } else {
                             echo '<p><strong>✅ Success!</strong> FullSpecsAll data retrieved and parsed successfully.</p>';
                             
-                            echo '<h3>Raw API Response Data Structure</h3>';
-                            echo '<p style="color: #666; font-size: 13px;">Below is the complete JSON response from the YATCO API. You can expand/collapse sections to explore the data structure.</p>';
+                            // Now import the vessel to CPT
+                            echo '<h3>Step 3: Importing Vessel to CPT</h3>';
+                            echo '<p>Now importing this vessel data into your Custom Post Type...</p>';
+                            
+                            // Require the helper function
+                            require_once YATCO_PLUGIN_DIR . 'includes/yatco-helpers.php';
+                            
+                            // Import the vessel
+                            $import_result = yatco_import_single_vessel( $token, $first_vessel_id );
+                            
+                            if ( is_wp_error( $import_result ) ) {
+                                echo '<div class="notice notice-error">';
+                                echo '<p><strong>❌ Import Failed:</strong> ' . esc_html( $import_result->get_error_message() ) . '</p>';
+                                echo '</div>';
+                            } else {
+                                $post_id = $import_result;
+                                $post_title = get_the_title( $post_id );
+                                $post_permalink = get_permalink( $post_id );
+                                
+                                echo '<div class="notice notice-success" style="background: #d4edda; border-left: 4px solid #46b450; padding: 15px; margin: 20px 0;">';
+                                echo '<p style="font-size: 16px; font-weight: bold; margin: 0 0 10px 0;"><strong>✅ Vessel Imported Successfully!</strong></p>';
+                                echo '<p style="margin: 5px 0;"><strong>Post ID:</strong> ' . esc_html( $post_id ) . '</p>';
+                                echo '<p style="margin: 5px 0;"><strong>Title:</strong> ' . esc_html( $post_title ) . '</p>';
+                                echo '<p style="margin: 15px 0 5px 0;"><strong>View the post:</strong></p>';
+                                echo '<p style="margin: 5px 0;">';
+                                echo '<a href="' . esc_url( $post_permalink ) . '" target="_blank" class="button button-primary" style="margin-right: 10px;">👁️ View Post (New Tab)</a>';
+                                echo '<a href="' . esc_url( admin_url( 'post.php?post=' . $post_id . '&action=edit' ) ) . '" class="button button-secondary">✏️ Edit Post</a>';
+                                echo '</p>';
+                                echo '</div>';
+                                
+                                // Show summary of what was imported
+                                echo '<h4 style="margin-top: 20px;">Import Summary:</h4>';
+                                echo '<div style="background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 15px;">';
+                                echo '<ul style="list-style: disc; margin-left: 20px;">';
+                                
+                                // Check what meta fields were saved
+                                $meta_fields_to_check = array(
+                                    'yacht_vessel_id' => 'Vessel ID',
+                                    'yacht_year' => 'Year',
+                                    'yacht_make' => 'Builder',
+                                    'yacht_model' => 'Model',
+                                    'yacht_price' => 'Price',
+                                    'yacht_length' => 'Length',
+                                    'yacht_location_custom_rjc' => 'Location',
+                                );
+                                
+                                foreach ( $meta_fields_to_check as $meta_key => $label ) {
+                                    $meta_value = get_post_meta( $post_id, $meta_key, true );
+                                    if ( ! empty( $meta_value ) ) {
+                                        echo '<li><strong>' . esc_html( $label ) . ':</strong> ' . esc_html( $meta_value ) . '</li>';
+                                    }
+                                }
+                                
+                                // Check for gallery images
+                                $gallery_count = 0;
+                                $gallery_urls = get_post_meta( $post_id, 'yacht_image_gallery_urls', true );
+                                if ( is_array( $gallery_urls ) ) {
+                                    $gallery_count = count( $gallery_urls );
+                                }
+                                if ( $gallery_count > 0 ) {
+                                    echo '<li><strong>Gallery Images:</strong> ' . esc_html( $gallery_count ) . ' images</li>';
+                                }
+                                
+                                echo '</ul>';
+                                echo '</div>';
+                            }
+                            
+                            // Still show the raw JSON data for reference
+                            echo '<h3 style="margin-top: 30px;">Raw API Response Data Structure</h3>';
+                            echo '<p style="color: #666; font-size: 13px;">Below is the complete JSON response from the YATCO API for reference:</p>';
                             
                             // Display formatted JSON
-                            echo '<div style="background: #fff; border: 1px solid #ccc; border-radius: 4px; padding: 15px; max-height: 800px; overflow: auto; font-family: monospace; font-size: 12px; line-height: 1.5;">';
+                            echo '<div style="background: #fff; border: 1px solid #ccc; border-radius: 4px; padding: 15px; max-height: 400px; overflow: auto; font-family: monospace; font-size: 11px; line-height: 1.4;">';
                             echo '<pre style="margin: 0; white-space: pre-wrap; word-wrap: break-word;">';
                             echo esc_html( wp_json_encode( $fullspecs, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE ) );
                             echo '</pre>';
-                            echo '</div>';
-                            
-                            // Also show a summary of key sections
-                            echo '<h3 style="margin-top: 30px;">Key Data Sections Summary</h3>';
-                            echo '<div style="background: #fff; border: 1px solid #ddd; border-radius: 4px; padding: 15px;">';
-                            echo '<ul style="list-style: disc; margin-left: 20px;">';
-                            
-                            $sections = array(
-                                'Result' => 'Main vessel result data',
-                                'BasicInfo' => 'Basic vessel information',
-                                'Dimensions' => 'Vessel dimensions',
-                                'VD' => 'Vessel details',
-                                'MiscInfo' => 'Miscellaneous information',
-                                'PhotoGallery' => 'Photo gallery array',
-                                'Specifications' => 'Detailed specifications',
-                            );
-                            
-                            foreach ( $sections as $section => $description ) {
-                                if ( isset( $fullspecs[ $section ] ) ) {
-                                    $count = is_array( $fullspecs[ $section ] ) ? count( $fullspecs[ $section ] ) : 'N/A';
-                                    echo '<li><strong>' . esc_html( $section ) . ':</strong> ' . esc_html( $description ) . ' (' . esc_html( $count ) . ' items)</li>';
-                                } else {
-                                    echo '<li><strong>' . esc_html( $section ) . ':</strong> <span style="color: #999;">Not present in response</span></li>';
-                                }
-                            }
-                            
-                            // Show sample of key fields
-                            if ( isset( $fullspecs['Result'] ) ) {
-                                $result = $fullspecs['Result'];
-                                echo '</ul>';
-                                echo '<h4>Sample Fields from Result Section:</h4>';
-                                echo '<table class="widefat" style="margin-top: 10px;">';
-                                echo '<tr><th style="width: 200px; text-align: left;">Field</th><th style="text-align: left;">Value</th></tr>';
-                                
-                                $key_fields = array( 'VesselID', 'VesselName', 'MLSID', 'AskingPriceCompare', 'YearBuilt', 'LOAFeet' );
-                                foreach ( $key_fields as $field ) {
-                                    $value = isset( $result[ $field ] ) ? $result[ $field ] : '<em>Not set</em>';
-                                    if ( is_array( $value ) ) {
-                                        $value = json_encode( $value );
-                                    }
-                                    echo '<tr><td><strong>' . esc_html( $field ) . '</strong></td><td>' . esc_html( $value ) . '</td></tr>';
-                                }
-                                echo '</table>';
-                            } else {
-                                echo '</ul>';
-                            }
-                            
                             echo '</div>';
                         }
                     }
