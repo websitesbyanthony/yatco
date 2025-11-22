@@ -293,9 +293,9 @@ if ( $price_on_application || empty( $asking_price ) ) {
             ?>
             <a href="<?php echo esc_url( $full_img_url ); ?>" 
                class="yacht-gallery-item" 
-               data-glightbox="type: image; gallery: yacht-gallery"
+               data-glightbox="gallery:yacht-gallery"
                <?php if ( ! empty( $img_caption ) ) : ?>
-               data-glightbox-title="<?php echo esc_attr( $img_caption ); ?>"
+               data-title="<?php echo esc_attr( $img_caption ); ?>"
                <?php endif; ?>>
               <img
                 src="<?php echo esc_url( $img_medium ?: $full_img_url ); ?>"
@@ -852,11 +852,15 @@ document.addEventListener('DOMContentLoaded', function() {
       const galleryItems = document.querySelectorAll('.yacht-gallery-item');
       if (galleryItems.length > 0) {
         try {
-          // Verify URLs are set correctly
-          galleryItems.forEach(function(item) {
+          // Verify URLs are set correctly and log them
+          const urls = [];
+          galleryItems.forEach(function(item, index) {
             const href = item.getAttribute('href');
-            if (!href || href === '#') {
-              console.warn('Gallery item missing href:', item);
+            urls.push(href);
+            if (!href || href === '#' || href === '') {
+              console.warn('Gallery item', index, 'missing or invalid href:', item);
+            } else {
+              console.log('Gallery item', index, 'URL:', href);
             }
           });
           
@@ -874,9 +878,30 @@ document.addEventListener('DOMContentLoaded', function() {
             openEffect: 'fade',
             closeEffect: 'fade',
             slideEffect: 'slide',
+            preload: true,
+            skin: 'clean',
+          });
+          
+          // Listen for lightbox events to debug
+          lightbox.on('slide_changed', ({ prev, current }) => {
+            console.log('Slide changed to:', current.index);
+            const slide = current.slide;
+            const media = slide.querySelector('.gslide-media');
+            if (media && media.children.length === 0) {
+              console.error('Slide media is empty!', current);
+            }
+          });
+          
+          lightbox.on('slide_before_load', ({ index, node, trigger }) => {
+            console.log('Loading slide', index, 'from URL:', trigger.href);
+          });
+          
+          lightbox.on('load_error', ({ index, node, trigger }) => {
+            console.error('Error loading slide', index, 'URL:', trigger.href);
           });
           
           console.log('GLightbox initialized with', galleryItems.length, 'items');
+          console.log('URLs:', urls);
         } catch (e) {
           console.error('GLightbox initialization error:', e);
         }
