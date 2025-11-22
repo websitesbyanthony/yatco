@@ -134,6 +134,37 @@ function yatco_options_page() {
     echo '<p>Import all vessels into the Yacht Custom Post Type (CPT) for faster queries, better SEO, and individual vessel pages. This may take several minutes for 7000+ vessels.</p>';
     echo '<p><strong>Benefits of CPT import:</strong> Better performance with WP_Query, individual pages per vessel, improved SEO, easier management via WordPress admin.</p>';
     
+    // Pre-check status for button display
+    $pre_cache_status = get_transient( 'yatco_cache_warming_status' );
+    $pre_cache_progress = get_transient( 'yatco_cache_warming_progress' );
+    $pre_is_warming_scheduled = wp_next_scheduled( 'yatco_warm_cache_hook' );
+    
+    $pre_has_active_progress = false;
+    if ( $pre_cache_progress !== false && is_array( $pre_cache_progress ) && ! empty( $pre_cache_progress ) ) {
+        $pre_last_processed = isset( $pre_cache_progress['last_processed'] ) ? intval( $pre_cache_progress['last_processed'] ) : 0;
+        $pre_total = isset( $pre_cache_progress['total'] ) ? intval( $pre_cache_progress['total'] ) : 0;
+        $pre_has_active_progress = ( $pre_total > 0 && $pre_last_processed < $pre_total );
+    }
+    
+    // Show import button at the top (prominently) before the "How Updates Work" section
+    echo '<div style="background: #fff; border: 2px solid #2271b1; border-radius: 4px; padding: 20px; margin: 20px 0;">';
+    echo '<h3 style="margin-top: 0; color: #2271b1;">📥 Import Vessels to CPT</h3>';
+    echo '<form method="post" style="margin: 15px 0;">';
+    wp_nonce_field( 'yatco_warm_cache', 'yatco_warm_cache_nonce' );
+    $pre_button_disabled = $pre_has_active_progress ? true : false;
+    submit_button( 'Import All Vessels to CPT', 'primary', 'yatco_warm_cache', false, array( 
+        'disabled' => $pre_button_disabled,
+        'style' => 'font-size: 16px; padding: 10px 20px; height: auto;'
+    ) );
+    echo '</form>';
+    
+    if ( $pre_button_disabled ) {
+        echo '<p style="color: #d63638; font-weight: bold;">⚠️ Import is currently running. Progress is shown below.</p>';
+    } else {
+        echo '<p style="color: #666; font-size: 13px;">Click the button above to import all active vessels from YATCO API into your WordPress Custom Post Type.</p>';
+    }
+    echo '</div>';
+    
     echo '<div style="background: #f0f6fc; border-left: 4px solid #2271b1; padding: 15px; margin: 15px 0;">';
     echo '<h3 style="margin-top: 0;">🔄 How Updates Work</h3>';
     echo '<p style="margin: 5px 0;"><strong>Automatic Updates:</strong> When you run "Import All Vessels to CPT" or enable auto-refresh, the system:</p>';
