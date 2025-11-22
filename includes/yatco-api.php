@@ -92,14 +92,21 @@ function yatco_fetch_fullspecs( $token, $vessel_id ) {
     }
 
     $body = wp_remote_retrieve_body( $response );
-        $data = json_decode( $body, true );
+    $data = json_decode( $body, true );
 
-    if ( null === $data ) {
-        return new WP_Error( 'yatco_parse_error', 'Could not parse FullSpecsAll JSON.' );
-        }
-
-        return $data;
+    // Check if JSON decode failed (error occurred)
+    $json_error = json_last_error();
+    if ( $json_error !== JSON_ERROR_NONE && $data === null ) {
+        return new WP_Error( 'yatco_parse_error', 'Could not parse FullSpecsAll JSON: ' . json_last_error_msg() );
     }
+    
+    // Check if API returned null (valid JSON but no data available for this vessel)
+    if ( $data === null || ( is_array( $data ) && empty( $data ) ) ) {
+        return new WP_Error( 'yatco_no_data', 'API returned null - this vessel does not have accessible FullSpecsAll data. The vessel may be inactive or restricted.' );
+    }
+
+    return $data;
+}
 
 /**
  * Connection test helper.

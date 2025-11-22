@@ -244,23 +244,45 @@ function yatco_options_page() {
                             
                             echo '</div>';
                         } else {
-                            echo '<p><strong>✅ Success!</strong> FullSpecsAll data retrieved and parsed successfully.</p>';
-                            
-                            // Now import the vessel to CPT
-                            echo '<h3>Step 3: Importing Vessel to CPT</h3>';
-                            echo '<p>Now importing this vessel data into your Custom Post Type...</p>';
-                            
-                            // Require the helper function
-                            require_once YATCO_PLUGIN_DIR . 'includes/yatco-helpers.php';
-                            
-                            // Import the vessel
-                            $import_result = yatco_import_single_vessel( $token, $first_vessel_id );
-                            
-                            if ( is_wp_error( $import_result ) ) {
-                                echo '<div class="notice notice-error">';
-                                echo '<p><strong>❌ Import Failed:</strong> ' . esc_html( $import_result->get_error_message() ) . '</p>';
+                            // Check if the response is null (API returned null JSON)
+                            if ( $fullspecs === null || empty( $fullspecs ) ) {
+                                echo '<div class="notice notice-warning" style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0;">';
+                                echo '<p style="font-size: 16px; font-weight: bold; margin: 0 0 10px 0;"><strong>⚠️ API Returned Null for Vessel ID ' . esc_html( $first_vessel_id ) . '</strong></p>';
+                                echo '<p>The YATCO API returned <code>null</code> for vessel ID <strong>' . esc_html( $first_vessel_id ) . '</strong>. This means the vessel data is not accessible via the FullSpecsAll endpoint.</p>';
+                                echo '<p><strong>Possible reasons:</strong></p>';
+                                echo '<ul style="margin-left: 20px; margin-top: 10px;">';
+                                echo '<li>The vessel may have been removed or is no longer active</li>';
+                                echo '<li>The vessel details may require different permissions</li>';
+                                echo '<li>The vessel ID may not have FullSpecsAll data available</li>';
+                                echo '</ul>';
+                                echo '<p style="margin-top: 15px;"><strong>💡 Solution:</strong> Try clicking the button again to fetch a different vessel. The next vessel ID in the list may have accessible data.</p>';
+                                echo '<p style="margin-top: 10px;">You can also manually import a specific vessel if you know its ID.</p>';
                                 echo '</div>';
                             } else {
+                                echo '<p><strong>✅ Success!</strong> FullSpecsAll data retrieved and parsed successfully.</p>';
+                                
+                                // Show summary of data sections available
+                                if ( is_array( $fullspecs ) ) {
+                                    $sections_found = array_keys( $fullspecs );
+                                    echo '<p style="color: #666; font-size: 13px;">Data sections found: <strong>' . esc_html( implode( ', ', $sections_found ) ) . '</strong></p>';
+                                }
+                                
+                                // Now import the vessel to CPT
+                                echo '<h3>Step 3: Importing Vessel to CPT</h3>';
+                                echo '<p>Now importing this vessel data into your Custom Post Type...</p>';
+                                
+                                // Require the helper function
+                                require_once YATCO_PLUGIN_DIR . 'includes/yatco-helpers.php';
+                                
+                                // Import the vessel
+                                $import_result = yatco_import_single_vessel( $token, $first_vessel_id );
+                                
+                                if ( is_wp_error( $import_result ) ) {
+                                    echo '<div class="notice notice-error">';
+                                    echo '<p><strong>❌ Import Failed:</strong> ' . esc_html( $import_result->get_error_message() ) . '</p>';
+                                    echo '<p>This might be due to missing or invalid data in the API response. Check the raw JSON below for details.</p>';
+                                    echo '</div>';
+                                } else {
                                 $post_id = $import_result;
                                 $post_title = get_the_title( $post_id );
                                 $post_permalink = get_permalink( $post_id );
