@@ -1229,3 +1229,123 @@ function yatco_import_page() {
     <?php
     echo '</div>';
 }
+
+/**
+ * Add meta box to yacht edit screen with Update Vessel button.
+ */
+function yatco_add_update_vessel_meta_box() {
+    add_meta_box(
+        'yatco_update_vessel',
+        'YATCO Vessel Update',
+        'yatco_update_vessel_meta_box_callback',
+        'yacht',
+        'side',
+        'high'
+    );
+}
+
+/**
+ * Meta box callback - displays Update Vessel button.
+ */
+function yatco_update_vessel_meta_box_callback( $post ) {
+    // Check if this is a YATCO vessel
+    $vessel_id = get_post_meta( $post->ID, 'yacht_vessel_id', true );
+    
+    if ( empty( $vessel_id ) ) {
+        echo '<p>This yacht post does not have a YATCO vessel ID. It may not have been imported from YATCO.</p>';
+        return;
+    }
+    
+    $token = yatco_get_token();
+    if ( empty( $token ) ) {
+        echo '<p style="color: #d63638;"><strong>Error:</strong> YATCO API token is not configured. Please set it in <a href="' . esc_url( admin_url( 'options-general.php?page=yatco_api' ) ) . '">Settings → YATCO API</a>.</p>';
+        return;
+    }
+    
+    // Check if update was just performed
+    if ( isset( $_GET['yatco_updated'] ) && $_GET['yatco_updated'] === '1' ) {
+        echo '<div class="notice notice-success inline" style="margin: 10px 0;"><p><strong>✓ Vessel updated successfully!</strong></p></div>';
+    }
+    
+    if ( isset( $_GET['yatco_update_error'] ) ) {
+        $error_msg = sanitize_text_field( $_GET['yatco_update_error'] );
+        echo '<div class="notice notice-error inline" style="margin: 10px 0;"><p><strong>Error:</strong> ' . esc_html( $error_msg ) . '</p></div>';
+    }
+    
+    $last_updated = get_post_meta( $post->ID, 'yacht_last_updated', true );
+    if ( $last_updated ) {
+        $last_updated_date = date_i18n( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), $last_updated );
+        echo '<p style="font-size: 12px; color: #666; margin-bottom: 15px;"><strong>Last Updated:</strong> ' . esc_html( $last_updated_date ) . '</p>';
+    }
+    
+    echo '<p>Click the button below to fetch the latest data for this vessel from the YATCO API and update all fields.</p>';
+    
+    $update_url = wp_nonce_url(
+        admin_url( 'admin-post.php?action=yatco_update_vessel&post_id=' . $post->ID ),
+        'yatco_update_vessel_' . $post->ID
+    );
+    
+    echo '<p><a href="' . esc_url( $update_url ) . '" class="button button-primary button-large" style="width: 100%; text-align: center;">🔄 Update Vessel from YATCO</a></p>';
+    
+    echo '<p style="font-size: 11px; color: #666; margin-top: 10px;">This will update all meta fields, images, and taxonomy terms with the latest data from YATCO.</p>';
+}
+
+/**
+ * Handle Update Vessel request.
+ */
+function yatco_handle_update_vessel() {
+    // Check user permissions
+    if ( ! current_user_can( 'edit_posts' ) ) {
+        wp_die( 'You do not have permission to update vessels.' );
+    }
+    
+    // Get post ID
+    $post_id = isset( $_GET['post_id'] ) ? intval( $_GET['post_id'] ) : 0;
+    
+    if ( ! $post_id ) {
+        wp_redirect( admin_url( 'edit.php?post_type=yacht&yatco_update_error=' . urlencode( 'Invalid post ID' ) ) );
+        exit;
+    }
+    
+    // Verify nonce
+    $nonce = isset( $_GET['_wpnonce'] ) ? $_GET['_wpnonce'] : '';
+    if ( ! wp_verify_nonce( $nonce, 'yatco_update_vessel_' . $post_id ) ) {
+        wp_redirect( admin_url( 'post.php?post=' . $post_id . '&action=edit&yatco_update_error=' . urlencode( 'Security check failed' ) ) );
+        exit;
+    }
+    
+    // Check if post exists and is a yacht
+    $post = get_post( $post_id );
+    if ( ! $post || $post->post_type !== 'yacht' ) {
+        wp_redirect( admin_url( 'edit.php?post_type=yacht&yatco_update_error=' . urlencode( 'Post not found or not a yacht' ) ) );
+        exit;
+    }
+    
+    // Get vessel ID
+    $vessel_id = get_post_meta( $post_id, 'yacht_vessel_id', true );
+    
+    if ( empty( $vessel_id ) ) {
+        wp_redirect( admin_url( 'post.php?post=' . $post_id . '&action=edit&yatco_update_error=' . urlencode( 'No YATCO vessel ID found for this post' ) ) );
+        exit;
+    }
+    
+    // Get API token
+    $token = yatco_get_token();
+    if ( empty( $token ) ) {
+        wp_redirect( admin_url( 'post.php?post=' . $post_id . '&action=edit&yatco_update_error=' . urlencode( 'YATCO API token not configured' ) ) );
+        exit;
+    }
+    
+    // Update the vessel
+    require_once YATCO_PLUGIN_DIR . 'includes/yatco-helpers.php';
+    $result = yatco_import_single_vessel( $token, $vessel_id );
+    
+    if ( is_wp_error( $result ) ) {
+        wp_redirect( admin_url( 'post.php?post=' . $post_id . '&action=edit&yatco_update_error=' . urlencode( $result->get_error_message() ) ) );
+        exit;
+    }
+    
+    // Success - redirect back to edit screen with success message
+    wp_redirect( admin_url( 'post.php?post=' . $post_id . '&action=edit&yatco_updated=1' ) );
+    exit;
+}

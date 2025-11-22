@@ -38,3 +38,7 @@ add_action( 'admin_init', 'yatco_maybe_schedule_cache_refresh' );
 // Admin settings page
 add_action( 'admin_menu', 'yatco_add_admin_menu' );
 add_action( 'admin_init', 'yatco_settings_init' );
+
+// Add Update Vessel button to yacht edit screen
+add_action( 'add_meta_boxes', 'yatco_add_update_vessel_meta_box' );
+add_action( 'admin_post_yatco_update_vessel', 'yatco_handle_update_vessel' );
