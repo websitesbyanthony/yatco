@@ -124,14 +124,14 @@ if ( $builder ) $yacht_title_parts[] = $builder;
 if ( $model ) $yacht_title_parts[] = $model;
 $yacht_title = ! empty( $yacht_title_parts ) ? implode( ' ', $yacht_title_parts ) : get_the_title();
 
-// Build location string
+// Build location string (without country)
 $location_parts = array();
 if ( $location_custom ) {
     $location_display = $location_custom;
 } else {
     if ( $location_city ) $location_parts[] = $location_city;
     if ( $location_state ) $location_parts[] = $location_state;
-    if ( $location_country ) $location_parts[] = $location_country;
+    // Country removed per user request
     $location_display = implode( ', ', $location_parts );
 }
 
@@ -460,15 +460,8 @@ if ( $price_on_application || empty( $asking_price ) ) {
     </div>
   </section>
 
-  <!-- LOCATION / STATUS STRIP -->
+  <!-- STATUS STRIP -->
   <section class="yacht-location-status">
-    <?php if ( $location_display ) : ?>
-    <p>
-      <strong>Location:</strong>
-      <?php echo yacht_output( $location_display ); ?>
-    </p>
-    <?php endif; ?>
-    
     <?php if ( $status_text || $agreement_type ) : ?>
     <p>
       <strong>Status:</strong>
@@ -478,13 +471,6 @@ if ( $price_on_application || empty( $asking_price ) ) {
       if ( $agreement_type ) $status_parts[] = $agreement_type;
       echo yacht_output( implode( ' (', $status_parts ) . ( count( $status_parts ) > 1 ? ')' : '' ) );
       ?>
-    </p>
-    <?php endif; ?>
-    
-    <?php if ( $days_on_market ) : ?>
-    <p>
-      <strong>Days on Market:</strong>
-      <?php echo yacht_output( $days_on_market ); ?>
     </p>
     <?php endif; ?>
   </section>
