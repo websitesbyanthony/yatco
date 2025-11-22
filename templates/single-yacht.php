@@ -29,6 +29,9 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
+// Get WordPress header
+get_header();
+
 // Get current post ID
 $post_id = get_the_ID();
 
@@ -536,4 +539,9 @@ if ( $price_on_application || empty( $asking_price ) ) {
   <?php endif; ?>
 
 </article>
+
+<?php
+// Get WordPress footer
+get_footer();
+?>
 
