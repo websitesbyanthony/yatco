@@ -178,11 +178,33 @@ function yatco_import_single_vessel( $token, $vessel_id ) {
         $make = $result['BuilderName'];
     }
 
+    // Model: From BasicInfo or Result.
+    $model = '';
+    if ( ! empty( $basic['Model'] ) ) {
+        $model = $basic['Model'];
+    } elseif ( ! empty( $result['Model'] ) ) {
+        $model = $result['Model'];
+    } elseif ( ! empty( $basic['ModelName'] ) ) {
+        $model = $basic['ModelName'];
+    } elseif ( ! empty( $result['ModelName'] ) ) {
+        $model = $result['ModelName'];
+    }
+
     // Vessel class: From BasicInfo.MainCategory, or Result.MainCategoryText.
     if ( ! empty( $basic['MainCategory'] ) ) {
         $class = $basic['MainCategory'];
     } elseif ( ! empty( $result['MainCategoryText'] ) ) {
         $class = $result['MainCategoryText'];
+    }
+    
+    // Sub Category: From BasicInfo or Result.
+    $sub_category = '';
+    if ( ! empty( $basic['SubCategory'] ) ) {
+        $sub_category = $basic['SubCategory'];
+    } elseif ( ! empty( $result['SubCategoryText'] ) ) {
+        $sub_category = $result['SubCategoryText'];
+    } elseif ( ! empty( $result['SubCategory'] ) ) {
+        $sub_category = $result['SubCategory'];
     }
 
     // Description: From VD or MiscInfo.
@@ -268,27 +290,116 @@ function yatco_import_single_vessel( $token, $vessel_id ) {
     $type = isset( $basic['VesselTypeText'] ) ? $basic['VesselTypeText'] : ( isset( $result['VesselTypeText'] ) ? $result['VesselTypeText'] : '' );
     $condition = isset( $result['VesselCondition'] ) ? $result['VesselCondition'] : '';
     $location = isset( $basic['LocationCustom'] ) ? $basic['LocationCustom'] : '';
+    $location_city = isset( $basic['LocationCity'] ) ? $basic['LocationCity'] : ( isset( $result['LocationCity'] ) ? $result['LocationCity'] : '' );
+    $location_state = isset( $basic['LocationState'] ) ? $basic['LocationState'] : ( isset( $result['LocationState'] ) ? $result['LocationState'] : '' );
+    $location_country = isset( $basic['LocationCountry'] ) ? $basic['LocationCountry'] : ( isset( $result['LocationCountry'] ) ? $result['LocationCountry'] : '' );
     $state_rooms = isset( $basic['StateRooms'] ) ? intval( $basic['StateRooms'] ) : ( isset( $result['StateRooms'] ) ? intval( $result['StateRooms'] ) : 0 );
     $image_url = isset( $result['MainPhotoUrl'] ) ? $result['MainPhotoUrl'] : ( isset( $basic['MainPhotoURL'] ) ? $basic['MainPhotoURL'] : '' );
+    
+    // Get price formatting and currency
+    $currency = isset( $basic['Currency'] ) ? $basic['Currency'] : ( isset( $result['Currency'] ) ? $result['Currency'] : 'USD' );
+    $price_formatted = isset( $result['AskingPriceFormatted'] ) ? $result['AskingPriceFormatted'] : '';
+    
+    // If no formatted price from API, create one from the price value
+    if ( empty( $price_formatted ) && ! empty( $price ) ) {
+        $price_formatted = $currency . ' ' . number_format( floatval( $price ), 0 );
+    }
+    
+    $price_on_application = isset( $result['PriceOnApplication'] ) ? (bool) $result['PriceOnApplication'] : false;
+    if ( ! $price_on_application && isset( $basic['PriceOnApplication'] ) ) {
+        $price_on_application = (bool) $basic['PriceOnApplication'];
+    }
+    
+    // Format the main price field as a formatted string for display
+    $price_formatted_display = $price_formatted;
+    if ( $price_on_application ) {
+        $price_formatted_display = 'Price on Application';
+    } elseif ( empty( $price_formatted_display ) && ! empty( $price ) ) {
+        $price_formatted_display = $currency . ' ' . number_format( floatval( $price ), 0 );
+    }
+    
+    // Get status information
+    $status_text = isset( $result['StatusText'] ) ? $result['StatusText'] : ( isset( $basic['StatusText'] ) ? $basic['StatusText'] : '' );
+    $agreement_type = isset( $result['AgreementType'] ) ? $result['AgreementType'] : ( isset( $basic['AgreementType'] ) ? $basic['AgreementType'] : '' );
+    $days_on_market = isset( $result['DaysOnMarket'] ) ? intval( $result['DaysOnMarket'] ) : ( isset( $basic['DaysOnMarket'] ) ? intval( $basic['DaysOnMarket'] ) : 0 );
+    
+    // Get hull material
+    $hull_material = isset( $result['HullMaterial'] ) ? $result['HullMaterial'] : ( isset( $dims['HullMaterial'] ) ? $dims['HullMaterial'] : '' );
+    
+    // Get virtual tour URL
+    $virtual_tour_url = isset( $result['VirtualTourUrl'] ) ? $result['VirtualTourUrl'] : ( isset( $basic['VirtualTourUrl'] ) ? $basic['VirtualTourUrl'] : '' );
+    
+    // Get videos
+    $videos = array();
+    if ( isset( $result['Videos'] ) && is_array( $result['Videos'] ) ) {
+        $videos = $result['Videos'];
+    } elseif ( isset( $basic['Videos'] ) && is_array( $basic['Videos'] ) ) {
+        $videos = $basic['Videos'];
+    }
+    
+    // Get broker information
+    $broker_first_name = isset( $result['BrokerFirstName'] ) ? $result['BrokerFirstName'] : ( isset( $basic['BrokerFirstName'] ) ? $basic['BrokerFirstName'] : '' );
+    $broker_last_name = isset( $result['BrokerLastName'] ) ? $result['BrokerLastName'] : ( isset( $basic['BrokerLastName'] ) ? $basic['BrokerLastName'] : '' );
+    $broker_phone = isset( $result['BrokerPhone'] ) ? $result['BrokerPhone'] : ( isset( $basic['BrokerPhone'] ) ? $basic['BrokerPhone'] : '' );
+    $broker_email = isset( $result['BrokerEmail'] ) ? $result['BrokerEmail'] : ( isset( $basic['BrokerEmail'] ) ? $basic['BrokerEmail'] : '' );
+    $broker_photo_url = isset( $result['BrokerPhotoUrl'] ) ? $result['BrokerPhotoUrl'] : ( isset( $basic['BrokerPhotoUrl'] ) ? $basic['BrokerPhotoUrl'] : '' );
+    
+    // Get company information
+    $company_name = isset( $result['CompanyName'] ) ? $result['CompanyName'] : ( isset( $basic['CompanyName'] ) ? $basic['CompanyName'] : '' );
+    $company_logo_url = isset( $result['CompanyLogoUrl'] ) ? $result['CompanyLogoUrl'] : ( isset( $basic['CompanyLogoUrl'] ) ? $basic['CompanyLogoUrl'] : '' );
+    $company_address = isset( $result['CompanyAddress'] ) ? $result['CompanyAddress'] : ( isset( $basic['CompanyAddress'] ) ? $basic['CompanyAddress'] : '' );
+    $company_website = isset( $result['CompanyWebsite'] ) ? $result['CompanyWebsite'] : ( isset( $basic['CompanyWebsite'] ) ? $basic['CompanyWebsite'] : '' );
+    $company_phone = isset( $result['CompanyPhone'] ) ? $result['CompanyPhone'] : ( isset( $basic['CompanyPhone'] ) ? $basic['CompanyPhone'] : '' );
+    $company_email = isset( $result['CompanyEmail'] ) ? $result['CompanyEmail'] : ( isset( $basic['CompanyEmail'] ) ? $basic['CompanyEmail'] : '' );
+    
+    // Get builder description
+    $builder_description = isset( $result['BuilderDescription'] ) ? $result['BuilderDescription'] : ( isset( $misc['BuilderDescription'] ) ? $misc['BuilderDescription'] : '' );
     
     // Store core meta – these can be mapped to ACF fields.
     update_post_meta( $post_id, 'yacht_mlsid', $mlsid );
     update_post_meta( $post_id, 'yacht_vessel_id', $vessel_id ); // Store vessel ID for reference
-    update_post_meta( $post_id, 'yacht_price', $price );
+    update_post_meta( $post_id, 'yacht_price', $price_formatted_display ); // Save formatted price string
     update_post_meta( $post_id, 'yacht_price_usd', $price_usd );
     update_post_meta( $post_id, 'yacht_price_eur', $price_eur );
+    update_post_meta( $post_id, 'yacht_price_formatted', $price_formatted );
+    update_post_meta( $post_id, 'yacht_currency', $currency );
+    update_post_meta( $post_id, 'yacht_price_on_application', $price_on_application );
     update_post_meta( $post_id, 'yacht_year', $year );
     update_post_meta( $post_id, 'yacht_length', $loa );
     update_post_meta( $post_id, 'yacht_length_feet', $loa_feet );
     update_post_meta( $post_id, 'yacht_length_meters', $loa_meters );
     update_post_meta( $post_id, 'yacht_make', $make );
+    update_post_meta( $post_id, 'yacht_model', $model );
     update_post_meta( $post_id, 'yacht_class', $class );
     update_post_meta( $post_id, 'yacht_category', $category );
+    update_post_meta( $post_id, 'yacht_sub_category', $sub_category );
     update_post_meta( $post_id, 'yacht_type', $type );
     update_post_meta( $post_id, 'yacht_condition', $condition );
     update_post_meta( $post_id, 'yacht_location', $location );
+    update_post_meta( $post_id, 'yacht_location_custom_rjc', $location );
+    update_post_meta( $post_id, 'yacht_location_city', $location_city );
+    update_post_meta( $post_id, 'yacht_location_state', $location_state );
+    update_post_meta( $post_id, 'yacht_location_country', $location_country );
     update_post_meta( $post_id, 'yacht_state_rooms', $state_rooms );
     update_post_meta( $post_id, 'yacht_image_url', $image_url );
+    update_post_meta( $post_id, 'yacht_hull_material', $hull_material );
+    update_post_meta( $post_id, 'yacht_status_text', $status_text );
+    update_post_meta( $post_id, 'yacht_agreement_type', $agreement_type );
+    update_post_meta( $post_id, 'yacht_days_on_market', $days_on_market );
+    update_post_meta( $post_id, 'yacht_virtual_tour_url', $virtual_tour_url );
+    update_post_meta( $post_id, 'yacht_videos', $videos );
+    update_post_meta( $post_id, 'yacht_broker_first_name', $broker_first_name );
+    update_post_meta( $post_id, 'yacht_broker_last_name', $broker_last_name );
+    update_post_meta( $post_id, 'yacht_broker_phone', $broker_phone );
+    update_post_meta( $post_id, 'yacht_broker_email', $broker_email );
+    update_post_meta( $post_id, 'yacht_broker_photo_url', $broker_photo_url );
+    update_post_meta( $post_id, 'yacht_company_name', $company_name );
+    update_post_meta( $post_id, 'yacht_company_logo_url', $company_logo_url );
+    update_post_meta( $post_id, 'yacht_company_address', $company_address );
+    update_post_meta( $post_id, 'yacht_company_website', $company_website );
+    update_post_meta( $post_id, 'yacht_company_phone', $company_phone );
+    update_post_meta( $post_id, 'yacht_company_email', $company_email );
+    update_post_meta( $post_id, 'yacht_builder_description', $builder_description );
     update_post_meta( $post_id, 'yacht_last_updated', time() );
     update_post_meta( $post_id, 'yacht_fullspecs_raw', $full );
 

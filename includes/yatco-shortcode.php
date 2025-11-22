@@ -153,8 +153,16 @@ function yatco_generate_vessels_html_from_data( $vessels, $builders, $categories
         </div>
         <?php endif; ?>
         <div class="yatco-vessels-grid <?php echo esc_attr( $column_class ); ?>" id="yatco-vessels-grid">
-        <?php foreach ( $vessels as $vessel ) : ?>
-            <div class="yatco-vessel-card" 
+        <?php foreach ( $vessels as $vessel ) : 
+            // Get the link - prefer CPT permalink if post_id exists, otherwise use the link from vessel data
+            $vessel_link = '';
+            if ( ! empty( $vessel['post_id'] ) ) {
+                $vessel_link = get_permalink( $vessel['post_id'] );
+            } elseif ( ! empty( $vessel['link'] ) ) {
+                $vessel_link = $vessel['link'];
+            }
+        ?>
+            <a href="<?php echo esc_url( $vessel_link ); ?>" class="yatco-vessel-card" 
                  data-name="<?php echo esc_attr( strtolower( $vessel['name'] ) ); ?>"
                  data-location="<?php echo esc_attr( strtolower( $vessel['location'] ) ); ?>"
                  data-builder="<?php echo esc_attr( $vessel['builder'] ); ?>"
@@ -209,7 +217,7 @@ function yatco_generate_vessels_html_from_data( $vessels, $builders, $categories
                         <?php endif; ?>
                     </div>
                 </div>
-            </div>
+            </a>
         <?php endforeach; ?>
         </div>
     </div>
@@ -585,8 +593,53 @@ function yatco_vessels_shortcode( $atts ) {
         
         $price_eur = isset( $basic['AskingPrice'] ) && $basic['AskingPrice'] > 0 && isset( $basic['Currency'] ) && $basic['Currency'] === 'EUR' ? floatval( $basic['AskingPrice'] ) : null;
         
+        // Try to find existing CPT post for this vessel
+        $post_id = 0;
+        $mlsid = isset( $result['MLSID'] ) ? $result['MLSID'] : '';
+        
+        // Try matching by MLSID first
+        if ( ! empty( $mlsid ) ) {
+            $existing = get_posts(
+                array(
+                    'post_type'   => 'yacht',
+                    'meta_key'    => 'yacht_mlsid',
+                    'meta_value'  => $mlsid,
+                    'numberposts' => 1,
+                    'fields'      => 'ids',
+                )
+            );
+            if ( ! empty( $existing ) ) {
+                $post_id = (int) $existing[0];
+            }
+        }
+        
+        // Fallback: Try matching by VesselID
+        if ( ! $post_id ) {
+            $existing = get_posts(
+                array(
+                    'post_type'   => 'yacht',
+                    'meta_key'    => 'yacht_vessel_id',
+                    'meta_value'  => $id,
+                    'numberposts' => 1,
+                    'fields'      => 'ids',
+                )
+            );
+            if ( ! empty( $existing ) ) {
+                $post_id = (int) $existing[0];
+            }
+        }
+        
+        // Use CPT permalink if post exists, otherwise fallback to archive link
+        $vessel_link = '';
+        if ( $post_id ) {
+            $vessel_link = get_permalink( $post_id );
+        } else {
+            $vessel_link = get_post_type_archive_link( 'yacht' ) . '?vessel_id=' . $id;
+        }
+        
         $vessel_data = array(
             'id'          => $id,
+            'post_id'     => $post_id,
             'name'        => $brief['Name'],
             'price'       => $brief['Price'],
             'price_usd'   => $price_usd,
@@ -602,7 +655,7 @@ function yatco_vessels_shortcode( $atts ) {
             'state_rooms' => $state_rooms,
             'location'    => $location,
             'image'       => isset( $result['MainPhotoUrl'] ) ? $result['MainPhotoUrl'] : ( isset( $basic['MainPhotoURL'] ) ? $basic['MainPhotoURL'] : '' ),
-            'link'        => get_post_type_archive_link( 'yacht' ) . '?vessel_id=' . $id,
+            'link'        => $vessel_link,
         );
 
         $vessels[] = $vessel_data;

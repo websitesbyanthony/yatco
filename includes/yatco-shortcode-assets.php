@@ -189,14 +189,21 @@ if ( ! defined( 'ABSPATH' ) ) {
     .yatco-vessels-grid.yatco-col-3 { grid-template-columns: repeat(3, 1fr); }
     .yatco-vessels-grid.yatco-col-4 { grid-template-columns: repeat(4, 1fr); }
     .yatco-vessel-card {
+        display: block;
         border: 1px solid #ddd;
         border-radius: 8px;
         overflow: hidden;
         background: #fff;
         transition: box-shadow 0.3s;
+        text-decoration: none;
+        color: inherit;
     }
     .yatco-vessel-card:hover {
         box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        text-decoration: none;
+    }
+    .yatco-vessel-card:visited {
+        color: inherit;
     }
     .yatco-vessel-image {
         width: 100%;
