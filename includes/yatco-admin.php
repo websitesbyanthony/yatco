@@ -157,6 +157,7 @@ function yatco_options_page() {
     $cache_status = get_transient( 'yatco_cache_warming_status' );
     $cache_progress = get_transient( 'yatco_cache_warming_progress' );
     $is_warming_scheduled = wp_next_scheduled( 'yatco_warm_cache_hook' );
+    $is_auto_refresh_scheduled = wp_next_scheduled( 'yatco_auto_refresh_cache_hook' );
     
     // Only consider running if there's actual active progress or scheduled event
     // Check for meaningful progress data (active import happening)
@@ -196,7 +197,9 @@ function yatco_options_page() {
         }
     }
     
-    $is_running = $has_active_status || $has_active_progress || $is_warming_scheduled;
+    // Only disable button if there's actually an active import, not just any scheduled event
+    // Scheduled auto-refresh shouldn't disable the manual import button
+    $is_running = $has_active_status || $has_active_progress || ( $is_warming_scheduled && $is_warming_scheduled > time() );
     
     // Handle stop import action
     if ( isset( $_POST['yatco_stop_import'] ) && check_admin_referer( 'yatco_stop_import', 'yatco_stop_import_nonce' ) ) {
@@ -213,12 +216,60 @@ function yatco_options_page() {
         
         echo '<div class="notice notice-success"><p><strong>Import stopped!</strong> All scheduled events have been cleared and progress has been reset.</p></div>';
         $is_running = false;
+        $has_active_status = false;
+        $has_active_progress = false;
+        $button_disabled = false;
+    }
+    
+    // Handle clear all action (for stuck states)
+    if ( isset( $_POST['yatco_clear_all'] ) && check_admin_referer( 'yatco_clear_all', 'yatco_clear_all_nonce' ) ) {
+        // Clear all scheduled events
+        wp_clear_scheduled_hook( 'yatco_warm_cache_hook' );
+        wp_clear_scheduled_hook( 'yatco_auto_refresh_cache_hook' );
+        
+        // Clear all transients
+        delete_transient( 'yatco_cache_warming_progress' );
+        delete_transient( 'yatco_cache_warming_status' );
+        
+        echo '<div class="notice notice-success"><p><strong>All cleared!</strong> All scheduled events and progress data have been cleared. The import button should now be enabled.</p></div>';
+        
+        // Reset variables
+        $cache_status = false;
+        $cache_progress = false;
+        $is_warming_scheduled = false;
+        $has_active_status = false;
+        $has_active_progress = false;
+        $is_running = false;
+        $button_disabled = false;
     }
     
     echo '<form method="post" style="margin-bottom: 15px;">';
     wp_nonce_field( 'yatco_warm_cache', 'yatco_warm_cache_nonce' );
-    submit_button( 'Import All Vessels to CPT', 'primary', 'yatco_warm_cache', false, array( 'disabled' => $is_running ? true : false ) );
+    // Only disable if there's actually an active import happening right now
+    // Don't disable just because auto-refresh is scheduled
+    $button_disabled = ( $has_active_status || $has_active_progress ) ? true : false;
+    submit_button( 'Import All Vessels to CPT', 'primary', 'yatco_warm_cache', false, array( 'disabled' => $button_disabled ) );
     echo '</form>';
+    
+    // Show debug info if button is disabled (for troubleshooting)
+    if ( $button_disabled ) {
+        echo '<p style="font-size: 11px; color: #999; margin-top: 5px;">';
+        echo 'Button disabled because: ';
+        $reasons = array();
+        if ( $has_active_status ) $reasons[] = 'Active status detected';
+        if ( $has_active_progress ) $reasons[] = 'Active progress detected';
+        echo implode( ', ', $reasons );
+        echo '</p>';
+        
+        // Show clear all button if button is stuck disabled (no actual active import)
+        if ( ! $has_active_progress && ! $has_active_status ) {
+            echo '<form method="post" style="margin: 10px 0;">';
+            wp_nonce_field( 'yatco_clear_all', 'yatco_clear_all_nonce' );
+            submit_button( '🔧 Clear All & Enable Button', 'secondary', 'yatco_clear_all', false, array( 'style' => 'background: #ff9800; border-color: #ff9800; color: #fff;' ) );
+            echo '<p style="font-size: 12px; color: #666; margin: 5px 0;">If the button is stuck disabled, click this to clear all status and enable it.</p>';
+            echo '</form>';
+        }
+    }
     
     if ( $is_running ) {
         echo '<form method="post" style="margin-bottom: 15px;">';
