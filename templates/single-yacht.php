@@ -141,12 +141,17 @@ if ( $main_category ) $category_parts[] = $main_category;
 if ( $sub_category ) $category_parts[] = $sub_category;
 $category_display = implode( ' / ', $category_parts );
 
-// Format price display
+// Format price display (remove USD)
 $price_display = '';
 if ( $price_on_application || empty( $asking_price ) ) {
     $price_display = $asking_price_formatted ? $asking_price_formatted : 'Price on Application';
 } else {
-    $price_display = $asking_price_formatted ? $asking_price_formatted : $currency . ' ' . number_format( floatval( $asking_price ), 0 );
+    // Remove currency prefix and just show the number
+    $price_display = $asking_price_formatted ? $asking_price_formatted : number_format( floatval( $asking_price ), 0 );
+    // Remove "USD" or currency prefix if present
+    $price_display = preg_replace( '/^(USD|EUR|\$|€)\s*/i', '', $price_display );
+    // Add dollar sign without "USD" text
+    $price_display = '$' . $price_display;
 }
 
 ?>
@@ -211,7 +216,7 @@ if ( $price_on_application || empty( $asking_price ) ) {
       <?php echo yacht_output( $yacht_title ); ?>
     </h1>
 
-    <!-- 3-Column Info Row -->
+    <!-- 4-Column Info Row -->
     <div class="yacht-info-columns">
       <div class="yacht-info-column">
         <div class="yacht-info-label">Category</div>
@@ -224,6 +229,18 @@ if ( $price_on_application || empty( $asking_price ) ) {
       <div class="yacht-info-column">
         <div class="yacht-info-label">Location</div>
         <div class="yacht-info-value"><?php echo yacht_output( $location_display ); ?></div>
+      </div>
+      <div class="yacht-info-column">
+        <div class="yacht-info-label">Days on Market</div>
+        <div class="yacht-info-value">
+          <?php 
+          if ( ! empty( $days_on_market ) && $days_on_market !== '0' ) {
+            echo yacht_output( $days_on_market );
+          } else {
+            echo '—';
+          }
+          ?>
+        </div>
       </div>
     </div>
 
@@ -752,7 +769,7 @@ if ( $price_on_application || empty( $asking_price ) ) {
 
 .yacht-info-columns {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 30px;
   margin: 30px 0;
   padding: 30px 0;
@@ -891,6 +908,13 @@ if ( $price_on_application || empty( $asking_price ) ) {
 
 .yacht-description-content a:hover {
   color: #005a87;
+}
+
+@media (max-width: 1024px) {
+  .yacht-info-columns {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 25px;
+  }
 }
 
 @media (max-width: 768px) {
