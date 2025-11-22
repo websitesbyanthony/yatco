@@ -94,24 +94,32 @@ function yatco_warm_cache_function() {
     $cache_key_progress = 'yatco_cache_warming_progress';
     $progress = get_transient( $cache_key_progress );
     $start_from = 0;
-    $cached_partial = array();
+    $cached_vessel_ids = array();
     $start_time = time();
     
     if ( $progress !== false && is_array( $progress ) ) {
         $start_from = isset( $progress['last_processed'] ) ? intval( $progress['last_processed'] ) : 0;
-        $cached_partial = isset( $progress['vessels'] ) && is_array( $progress['vessels'] ) ? $progress['vessels'] : array();
+        // Support both old format (vessels) and new format (vessel_ids) for backward compatibility
+        if ( isset( $progress['vessel_ids'] ) && is_array( $progress['vessel_ids'] ) ) {
+            $cached_vessel_ids = $progress['vessel_ids'];
+        } elseif ( isset( $progress['vessels'] ) && is_array( $progress['vessels'] ) ) {
+            // Extract IDs from old format
+            foreach ( $progress['vessels'] as $vessel ) {
+                if ( isset( $vessel['id'] ) ) {
+                    $cached_vessel_ids[] = intval( $vessel['id'] );
+                }
+            }
+        }
         $start_time = isset( $progress['start_time'] ) ? intval( $progress['start_time'] ) : time();
         $ids = array_slice( $ids, $start_from );
-        $vessels = $cached_partial;
     } else {
-        $vessels = array();
         $start_time = time();
         // Save initial progress so we can see it started
         $initial_progress = array(
             'last_processed' => 0,
             'total'         => $vessel_count,
             'processed'     => 0,
-            'vessels'       => array(),
+            'vessel_ids'    => array(), // Use vessel_ids instead of vessels
             'start_time'    => $start_time,
             'timestamp'     => time(),
         );
@@ -122,25 +130,97 @@ function yatco_warm_cache_function() {
     $processed = 0;
     $errors = 0;
     $delay_seconds = 45; // 45 seconds between vessels
+    $vessel_ids = $cached_vessel_ids; // Start with previously processed IDs
 
     foreach ( $ids as $index => $id ) {
         $processed++;
         $actual_index = $start_from + $index;
         
+        // Check if import was stopped (stop flag or transient was cleared)
+        $stop_flag = get_transient( 'yatco_cache_warming_stop' );
+        if ( $stop_flag !== false ) {
+            // Stop flag was set, stop processing
+            delete_transient( 'yatco_cache_warming_stop' );
+            delete_transient( $cache_key_progress );
+            if ( function_exists( 'set_transient' ) ) {
+                set_transient( 'yatco_cache_warming_status', 'Import stopped by user.', 60 );
+            }
+            return;
+        }
+        
+        $current_progress = get_transient( $cache_key_progress );
+        if ( $current_progress === false && $actual_index > 0 ) {
+            // Progress was cleared, stop processing
+            if ( function_exists( 'set_transient' ) ) {
+                set_transient( 'yatco_cache_warming_status', 'Import stopped (progress cleared).', 60 );
+            }
+            return;
+        }
+        
+        // Check for timeout - if progress hasn't been updated in 30 minutes, consider it stuck
+        if ( $current_progress !== false && is_array( $current_progress ) && isset( $current_progress['timestamp'] ) ) {
+            $last_update = intval( $current_progress['timestamp'] );
+            if ( ( time() - $last_update > 1800 ) && $actual_index > 0 ) {
+                if ( function_exists( 'set_transient' ) ) {
+                    set_transient( 'yatco_cache_warming_status', 'Import appears to be stuck (no progress for 30+ minutes). Please clear and restart.', 60 );
+                }
+                return;
+            }
+        }
+        
         // Reset execution time
         @set_time_limit( 300 ); // 5 minutes per vessel
+        
+        // Clear memory periodically to prevent buildup
+        if ( $processed % 10 == 0 ) {
+            if ( function_exists( 'gc_collect_cycles' ) ) {
+                gc_collect_cycles();
+            }
+        }
 
-        // Import vessel to CPT
-        $import_result = yatco_import_single_vessel( $token, $id );
-        if ( is_wp_error( $import_result ) ) {
-            $errors++;
+        try {
+            // Import vessel to CPT
+            $import_result = yatco_import_single_vessel( $token, $id );
+            if ( is_wp_error( $import_result ) ) {
+                $errors++;
+                
+                // Still track the vessel ID for statistics
+                $vessel_ids[] = intval( $id );
+                
+                // Save progress even on error (only store essential data, not full vessel data)
+                $progress_data = array(
+                    'last_processed' => $actual_index + 1,
+                    'total'         => $vessel_count,
+                    'processed'     => count( $vessel_ids ),
+                    'vessel_ids'    => $vessel_ids, // Only store IDs, not full data
+                    'start_time'    => $start_time,
+                    'timestamp'     => time(),
+                    'errors'        => $errors,
+                );
+                if ( function_exists( 'set_transient' ) ) {
+                    set_transient( $cache_key_progress, $progress_data, 3600 );
+                }
+                
+                // Update status
+                $percent = round( ( ( $actual_index + 1 ) / $vessel_count ) * 100, 1 );
+                if ( function_exists( 'set_transient' ) ) {
+                    set_transient( 'yatco_cache_warming_status', "Error importing vessel {$id}. Continuing... Processed " . ( $actual_index + 1 ) . " of {$vessel_count} ({$percent}%)...", 600 );
+                }
+                
+                // Wait 45 seconds before next vessel (even on error)
+                sleep( $delay_seconds );
+                continue;
+            }
             
-            // Save progress even on error
+            $post_id = $import_result;
+            $vessel_ids[] = intval( $id ); // Store ID for statistics
+            
+            // Save progress after EACH vessel (only essential data, not full vessel data)
             $progress_data = array(
                 'last_processed' => $actual_index + 1,
                 'total'         => $vessel_count,
-                'processed'     => count( $vessels ),
-                'vessels'       => $vessels,
+                'processed'     => count( $vessel_ids ),
+                'vessel_ids'    => $vessel_ids, // Only store IDs, not full data
                 'start_time'    => $start_time,
                 'timestamp'     => time(),
                 'errors'        => $errors,
@@ -149,88 +229,59 @@ function yatco_warm_cache_function() {
                 set_transient( $cache_key_progress, $progress_data, 3600 );
             }
             
-            // Update status
+            // Update status after each vessel
             $percent = round( ( ( $actual_index + 1 ) / $vessel_count ) * 100, 1 );
+            if ( function_exists( 'get_the_title' ) ) {
+                $vessel_name = get_the_title( $post_id );
+                $vessel_name_short = strlen( $vessel_name ) > 40 ? substr( $vessel_name, 0, 40 ) . '...' : $vessel_name;
+                $status_msg = "Completed: {$vessel_name_short}. Processed " . ( $actual_index + 1 ) . " of {$vessel_count} ({$percent}%). Waiting 45 seconds before next vessel...";
+            } else {
+                $status_msg = "Processed " . ( $actual_index + 1 ) . " of {$vessel_count} ({$percent}%). Waiting 45 seconds before next vessel...";
+            }
             if ( function_exists( 'set_transient' ) ) {
-                set_transient( 'yatco_cache_warming_status', "Error importing vessel {$id}. Continuing... Processed " . ( $actual_index + 1 ) . " of {$vessel_count} ({$percent}%)...", 600 );
+                set_transient( 'yatco_cache_warming_status', $status_msg, 600 );
             }
             
-            // Wait 45 seconds before next vessel (even on error)
-            sleep( $delay_seconds );
-            continue;
-        }
-        
-        $post_id = $import_result;
-        
-        // Get vessel data from post meta for progress tracking
-        $vessel_name = get_the_title( $post_id );
-        $vessel_data = array(
-            'id'          => $id,
-            'post_id'     => $post_id,
-            'name'        => $vessel_name,
-            'price'       => get_post_meta( $post_id, 'yacht_price', true ),
-            'price_usd'   => get_post_meta( $post_id, 'yacht_price_usd', true ),
-            'price_eur'   => get_post_meta( $post_id, 'yacht_price_eur', true ),
-            'year'        => get_post_meta( $post_id, 'yacht_year', true ),
-            'loa'         => get_post_meta( $post_id, 'yacht_length', true ),
-            'loa_feet'    => get_post_meta( $post_id, 'yacht_length_feet', true ),
-            'loa_meters'  => get_post_meta( $post_id, 'yacht_length_meters', true ),
-            'builder'     => get_post_meta( $post_id, 'yacht_make', true ),
-            'category'    => get_post_meta( $post_id, 'yacht_category', true ),
-            'type'        => get_post_meta( $post_id, 'yacht_type', true ),
-            'condition'   => get_post_meta( $post_id, 'yacht_condition', true ),
-            'state_rooms' => get_post_meta( $post_id, 'yacht_state_rooms', true ),
-            'location'    => get_post_meta( $post_id, 'yacht_location', true ),
-            'image'       => get_post_meta( $post_id, 'yacht_image_url', true ),
-            'link'        => get_permalink( $post_id ),
-        );
-
-        $vessels[] = $vessel_data;
-        
-        // Save progress after EACH vessel (so it can resume if interrupted)
-        $progress_data = array(
-            'last_processed' => $actual_index + 1,
-            'total'         => $vessel_count,
-            'processed'     => count( $vessels ),
-            'vessels'       => $vessels,
-            'start_time'    => $start_time,
-            'timestamp'     => time(),
-            'errors'        => $errors,
-        );
-        if ( function_exists( 'set_transient' ) ) {
-            set_transient( $cache_key_progress, $progress_data, 3600 );
-        }
-        
-        // Update status after each vessel
-        $percent = round( ( ( $actual_index + 1 ) / $vessel_count ) * 100, 1 );
-        $vessel_name_short = strlen( $vessel_name ) > 40 ? substr( $vessel_name, 0, 40 ) . '...' : $vessel_name;
-        if ( function_exists( 'set_transient' ) ) {
-            set_transient( 'yatco_cache_warming_status', "Completed: {$vessel_name_short}. Processed " . ( $actual_index + 1 ) . " of {$vessel_count} ({$percent}%). Waiting 45 seconds before next vessel...", 600 );
-        }
-        
-        // Reset execution time
-        @set_time_limit( 300 );
-        
-        // Wait 45 seconds before processing next vessel (to prevent server overload)
-        // Skip delay on last vessel
-        if ( $index < count( $ids ) - 1 ) {
-            sleep( $delay_seconds );
+            // Reset execution time
+            @set_time_limit( 300 );
+            
+            // Wait 45 seconds before processing next vessel (to prevent server overload)
+            // Skip delay on last vessel
+            if ( $index < count( $ids ) - 1 ) {
+                sleep( $delay_seconds );
+            }
+        } catch ( Exception $e ) {
+            // Handle exceptions gracefully
+            $errors++;
+            $vessel_ids[] = intval( $id );
+            
+            $progress_data = array(
+                'last_processed' => $actual_index + 1,
+                'total'         => $vessel_count,
+                'processed'     => count( $vessel_ids ),
+                'vessel_ids'    => $vessel_ids,
+                'start_time'    => $start_time,
+                'timestamp'     => time(),
+                'errors'        => $errors,
+            );
+            if ( function_exists( 'set_transient' ) ) {
+                set_transient( $cache_key_progress, $progress_data, 3600 );
+                set_transient( 'yatco_cache_warming_status', "Exception importing vessel {$id}: " . $e->getMessage() . ". Continuing...", 600 );
+            }
+            
+            if ( $index < count( $ids ) - 1 ) {
+                sleep( $delay_seconds );
+            }
         }
     }
 
-    // Calculate daily statistics (added, removed, updated) using CPT posts
-    $all_vessel_ids = array();
-    foreach ( $vessels as $vessel ) {
-        if ( ! empty( $vessel['id'] ) ) {
-            $all_vessel_ids[] = intval( $vessel['id'] );
-        }
-    }
-    yatco_calculate_daily_stats_from_cpt( $all_vessel_ids );
+    // Calculate daily statistics using vessel IDs only
+    yatco_calculate_daily_stats_from_cpt( $vessel_ids );
     
     // Clear progress after successful completion
     delete_transient( $cache_key_progress );
     
-    $total_processed = count( $vessels );
+    $total_processed = count( $vessel_ids );
     $total_cpt_posts = wp_count_posts( 'yacht' );
     $published_count = isset( $total_cpt_posts->publish ) ? intval( $total_cpt_posts->publish ) : 0;
     

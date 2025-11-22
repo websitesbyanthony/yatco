@@ -451,10 +451,17 @@ function yatco_options_page() {
     $is_auto_refresh_scheduled = wp_next_scheduled( 'yatco_auto_refresh_cache_hook' );
     
     $has_active_progress = false;
+    $is_stuck = false;
     if ( $cache_progress !== false && is_array( $cache_progress ) && ! empty( $cache_progress ) ) {
         $last_processed = isset( $cache_progress['last_processed'] ) ? intval( $cache_progress['last_processed'] ) : 0;
         $total = isset( $cache_progress['total'] ) ? intval( $cache_progress['total'] ) : 0;
         $has_active_progress = ( $total > 0 && $last_processed < $total );
+        
+        // Check if progress is stuck (hasn't been updated in 30 minutes)
+        $timestamp = isset( $cache_progress['timestamp'] ) ? intval( $cache_progress['timestamp'] ) : 0;
+        if ( $has_active_progress && $timestamp > 0 && ( time() - $timestamp > 1800 ) ) {
+            $is_stuck = true;
+        }
     }
     
     $has_active_status = false;
@@ -480,9 +487,12 @@ function yatco_options_page() {
         }
     }
     
-    $is_running = $has_active_status || $has_active_progress || ( $is_warming_scheduled && $is_warming_scheduled > time() );
+    $is_running = ( $has_active_status || $has_active_progress || ( $is_warming_scheduled && $is_warming_scheduled > time() ) ) && ! $is_stuck;
     
     if ( isset( $_POST['yatco_stop_import'] ) && check_admin_referer( 'yatco_stop_import', 'yatco_stop_import_nonce' ) ) {
+        // Set stop flag for running processes
+        set_transient( 'yatco_cache_warming_stop', true, 60 );
+        
         $scheduled = wp_next_scheduled( 'yatco_warm_cache_hook' );
         if ( $scheduled ) {
             wp_unschedule_event( $scheduled, 'yatco_warm_cache_hook' );
@@ -491,6 +501,7 @@ function yatco_options_page() {
         
         delete_transient( 'yatco_cache_warming_progress' );
         delete_transient( 'yatco_cache_warming_status' );
+        delete_transient( 'yatco_cache_warming_stop' ); // Clear after a moment
         
         // Flush rewrite rules to ensure permalinks work correctly after stopping
         flush_rewrite_rules( false );
@@ -502,11 +513,15 @@ function yatco_options_page() {
     }
     
     if ( isset( $_POST['yatco_clear_all'] ) && check_admin_referer( 'yatco_clear_all', 'yatco_clear_all_nonce' ) ) {
+        // Set stop flag for running processes
+        set_transient( 'yatco_cache_warming_stop', true, 60 );
+        
         wp_clear_scheduled_hook( 'yatco_warm_cache_hook' );
         wp_clear_scheduled_hook( 'yatco_auto_refresh_cache_hook' );
         
         delete_transient( 'yatco_cache_warming_progress' );
         delete_transient( 'yatco_cache_warming_status' );
+        delete_transient( 'yatco_cache_warming_stop' ); // Clear after a moment
         
         // Flush rewrite rules to ensure permalinks work correctly after stopping
         flush_rewrite_rules( false );
@@ -578,26 +593,49 @@ function yatco_options_page() {
     if ( $cache_progress !== false && is_array( $cache_progress ) ) {
         $last_processed = isset( $cache_progress['last_processed'] ) ? intval( $cache_progress['last_processed'] ) : 0;
         $total = isset( $cache_progress['total'] ) ? intval( $cache_progress['total'] ) : 0;
+        $timestamp = isset( $cache_progress['timestamp'] ) ? intval( $cache_progress['timestamp'] ) : 0;
+        $is_progress_stuck = false;
+        
+        // Check if progress is stuck (hasn't been updated in 30 minutes)
+        if ( $timestamp > 0 && ( time() - $timestamp > 1800 ) && $last_processed < $total ) {
+            $is_progress_stuck = true;
+        }
         
         if ( $total > 0 ) {
             $percent = round( ( $last_processed / $total ) * 100, 1 );
             echo '<div style="background: #f9f9f9; border: 1px solid #ddd; padding: 20px; margin: 20px 0;">';
             echo '<h3>Progress</h3>';
+            
+            if ( $is_progress_stuck ) {
+                echo '<div class="notice notice-warning" style="margin: 10px 0; padding: 10px;">';
+                echo '<p><strong>⚠️ Import appears to be stuck!</strong> Progress hasn\'t been updated in over 30 minutes. The process may have crashed. Please click "Stop Import" below and restart if needed.</p>';
+                echo '</div>';
+            }
+            
             echo '<p>Processed: <strong>' . number_format( $last_processed ) . ' / ' . number_format( $total ) . '</strong> vessels (' . $percent . '%)</p>';
             
+            if ( $timestamp > 0 ) {
+                $last_update = human_time_diff( $timestamp, time() );
+                echo '<p style="color: #666; font-size: 12px;">Last updated: ' . $last_update . ' ago</p>';
+            }
+            
             $progress_width = min( $percent, 100 );
+            $progress_color = $is_progress_stuck ? '#dc3232' : '#2271b1';
             echo '<div style="background: #e0e0e0; border-radius: 4px; height: 30px; width: 100%; position: relative; overflow: hidden;">';
-            echo '<div style="background: #2271b1; height: 100%; width: ' . $progress_width . '%; transition: width 0.3s ease; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: bold; font-size: 12px;">' . $percent . '%</div>';
+            echo '<div style="background: ' . $progress_color . '; height: 100%; width: ' . $progress_width . '%; transition: width 0.3s ease; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: bold; font-size: 12px;">' . $percent . '%</div>';
             echo '</div>';
             
-            if ( $is_running && $last_processed < $total ) {
+            if ( ( $is_running || $is_progress_stuck ) && $last_processed < $total ) {
                 echo '<form method="post" style="margin-top: 15px;">';
                 wp_nonce_field( 'yatco_stop_import', 'yatco_stop_import_nonce' );
                 echo '<button type="submit" name="yatco_stop_import" class="button button-secondary" style="background: #dc3232; border-color: #dc3232; color: #fff; font-weight: bold; padding: 8px 16px;">🛑 Stop Import Now</button>';
                 echo '</form>';
             }
             
+            // Support both old format (vessels) and new format (vessel_ids)
+            $has_vessel_list = false;
             if ( isset( $cache_progress['vessels'] ) && is_array( $cache_progress['vessels'] ) && ! empty( $cache_progress['vessels'] ) ) {
+                $has_vessel_list = true;
                 $recent_vessels = array_slice( $cache_progress['vessels'], -10 );
                 echo '<h4 style="margin-top: 20px;">Recently Processed Vessels</h4>';
                 echo '<table class="widefat fixed striped" style="margin-top: 10px;">';
