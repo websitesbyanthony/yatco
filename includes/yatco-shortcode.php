@@ -439,9 +439,11 @@ function yatco_vessels_shortcode( $atts ) {
     
     // FALLBACK: If cache is disabled or no CPT posts exist, fetch from API
 
-    // Fetch all active vessel IDs (set to 0 to get all, or use a high limit like 10000)
-    // For 7000+ vessels, we need to fetch all IDs
-    $ids_to_fetch = 0; // 0 means fetch all
+    // Respect the max parameter - limit how many vessel IDs to fetch
+    $max_vessels = ! empty( $atts['max'] ) && $atts['max'] !== '0' ? intval( $atts['max'] ) : 50;
+    // Fetch more IDs than needed to account for filtering (3x the desired results, but cap at reasonable limit)
+    $ids_to_fetch = min( $max_vessels * 3, 500 ); // Cap at 500 to prevent timeouts
+    
     $ids = yatco_get_active_vessel_ids( $token, $ids_to_fetch );
 
     if ( is_wp_error( $ids ) ) {
@@ -468,63 +470,28 @@ function yatco_vessels_shortcode( $atts ) {
     $processed = 0;
     $error_count = 0;
     
-    // Increase limits to handle large datasets
-    @ini_set( 'max_execution_time', 0 ); // Unlimited (or very high)
-    @ini_set( 'memory_limit', '512M' ); // Increase memory limit
-    @set_time_limit( 0 ); // Remove time limit
+    // Increase limits to handle processing
+    @ini_set( 'max_execution_time', 300 ); // 5 minutes max
+    @ini_set( 'memory_limit', '256M' ); // Reasonable memory limit
+    @set_time_limit( 300 ); // 5 minutes
     
-    // Check if we have partially cached data from a previous run
-    $cache_key_progress = 'yatco_vessels_processing_progress';
-    $progress = get_transient( $cache_key_progress );
-    $start_from = 0;
-    $cached_partial = array();
+    // Start fresh - no progress caching when cache="no"
+    $vessels = array();
+    $processed = 0;
+    $error_count = 0;
     
-    if ( $progress !== false && is_array( $progress ) ) {
-        $start_from = isset( $progress['last_processed'] ) ? intval( $progress['last_processed'] ) : 0;
-        $cached_partial = isset( $progress['vessels'] ) && is_array( $progress['vessels'] ) ? $progress['vessels'] : array();
-        // Continue from where we left off
-        $ids = array_slice( $ids, $start_from );
-        $vessels = $cached_partial;
-    } else {
-        $vessels = array();
-    }
-    
-    // Process in batches to avoid memory issues
-    $batch_size = 20; // Process 20 at a time
-    $total_to_process = count( $ids );
-    $batch_num = 0;
-    
+    // Process vessels up to max limit
     foreach ( $ids as $index => $id ) {
-        $processed++;
-        $actual_index = $start_from + $index;
-        
-        // Save progress every batch to prevent data loss
-        if ( $processed % $batch_size === 0 ) {
-            $batch_num++;
-            
-            // Save progress so we can resume if interrupted
-            $progress_data = array(
-                'last_processed' => $actual_index,
-                'total'         => $vessel_count,
-                'processed'     => count( $vessels ),
-                'vessels'       => $vessels,
-                'timestamp'     => time(),
-            );
-            set_transient( $cache_key_progress, $progress_data, 3600 ); // Save for 1 hour
-            
-            // Reset execution time and flush output to prevent timeout
-            @set_time_limit( 0 );
-            if ( function_exists( 'fastcgi_finish_request' ) ) {
-                @fastcgi_finish_request();
-            }
-            
-            // Optional: Add a small delay to reduce server load
-            usleep( 100000 ); // 0.1 second delay
+        // Stop if we've reached the max limit
+        if ( count( $vessels ) >= $max_vessels ) {
+            break;
         }
+        
+        $processed++;
         
         // Reset execution time periodically
         if ( $processed % 10 === 0 ) {
-            @set_time_limit( 0 );
+            @set_time_limit( 300 );
         }
 
         $full = yatco_fetch_fullspecs( $token, $id );
@@ -659,6 +626,11 @@ function yatco_vessels_shortcode( $atts ) {
         );
 
         $vessels[] = $vessel_data;
+        
+        // Stop if we've reached the max limit
+        if ( count( $vessels ) >= $max_vessels ) {
+            break;
+        }
     }
 
     // Collect unique values for filter dropdowns
@@ -685,9 +657,6 @@ function yatco_vessels_shortcode( $atts ) {
     sort( $categories );
     sort( $types );
     sort( $conditions );
-
-    // Clear progress after successful completion
-    delete_transient( $cache_key_progress );
 
     // Generate HTML output
     $output = yatco_generate_vessels_html_from_data( $vessels, $builders, $categories, $types, $conditions, $atts );
