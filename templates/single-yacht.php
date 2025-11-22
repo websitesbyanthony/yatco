@@ -258,8 +258,6 @@ if ( $price_on_application || empty( $asking_price ) ) {
 
     <!-- CTAs -->
     <div class="yacht-hero-cta">
-      <a href="#yacht-enquiry" class="btn-primary">Enquire Now</a>
-
       <?php if ( $virtual_tour_url ) : ?>
       <a href="<?php echo esc_url( $virtual_tour_url ); ?>" target="_blank" class="btn-secondary">
         View Virtual Tour
@@ -511,41 +509,6 @@ if ( $price_on_application || empty( $asking_price ) ) {
       <?php endif; ?>
     </div>
     <?php endif; ?>
-
-    <!-- Enquiry form (our own form, not from API) -->
-    <div class="yacht-enquiry-form" id="yacht-enquiry">
-      <h2>Enquire About This Vessel</h2>
-
-      <form action="" method="post">
-        <div class="form-row">
-          <label for="name">Name *</label>
-          <input type="text" id="name" name="name" required>
-        </div>
-
-        <div class="form-row">
-          <label for="email">Email *</label>
-          <input type="email" id="email" name="email" required>
-        </div>
-
-        <div class="form-row">
-          <label for="phone">Phone</label>
-          <input type="tel" id="phone" name="phone">
-        </div>
-
-        <div class="form-row">
-          <label for="message">Message</label>
-          <textarea id="message" name="message" rows="4"></textarea>
-        </div>
-
-        <!-- Hidden fields for routing -->
-        <input type="hidden" name="vessel_id" value="<?php echo esc_attr( $post_id ); ?>">
-        <input type="hidden" name="vessel_name" value="<?php echo esc_attr( $yacht_title ); ?>">
-        <input type="hidden" name="builder" value="<?php echo esc_attr( $builder ); ?>">
-        <input type="hidden" name="year_built" value="<?php echo esc_attr( $year_built ); ?>">
-
-        <button type="submit" class="btn-primary">Send Enquiry</button>
-      </form>
-    </div>
   </section>
 
   <!-- ABOUT THE BUILDER -->
