@@ -218,6 +218,58 @@ if ( $price_on_application || empty( $asking_price ) ) {
     <?php endif; ?>
   </section>
 
+  <!-- MEDIA SECTION - GALLERY -->
+  <section class="yacht-media" id="yacht-media">
+    <?php if ( ! empty( $gallery_images ) && is_array( $gallery_images ) ) : ?>
+    <h2>Gallery</h2>
+    <div class="yacht-gallery-carousel-wrapper">
+      <div class="swiper yacht-gallery-carousel">
+        <div class="swiper-wrapper">
+          <?php foreach ( $gallery_images as $image ) : 
+            // Handle array structure: ['url' => '...', 'caption' => '...'] or just URL string
+            $img_url = is_array( $image ) ? ( $image['url'] ?? $image['largeImageURL'] ?? '' ) : $image;
+            $img_medium = is_array( $image ) ? ( $image['mediumImageURL'] ?? $img_url ) : $img_url;
+            $img_caption = is_array( $image ) ? ( $image['caption'] ?? '' ) : '';
+            
+            if ( empty( $img_url ) ) continue;
+          ?>
+          <div class="swiper-slide">
+            <?php 
+            // Ensure we have absolute URLs
+            $full_img_url = $img_url;
+            if ( ! empty( $img_url ) && ! preg_match( '/^https?:\/\//', $img_url ) ) {
+              $full_img_url = 'https://' . ltrim( $img_url, '/' );
+            }
+            ?>
+            <a href="<?php echo esc_url( $full_img_url ); ?>" 
+               class="yacht-gallery-item" 
+               data-glightbox="gallery:yacht-gallery"
+               <?php if ( ! empty( $img_caption ) ) : ?>
+               data-title="<?php echo esc_attr( $img_caption ); ?>"
+               <?php endif; ?>>
+              <img
+                src="<?php echo esc_url( $img_medium ?: $full_img_url ); ?>"
+                alt="<?php echo esc_attr( $img_caption ?: $yacht_title . ' image' ); ?>"
+                loading="lazy"
+                data-src="<?php echo esc_url( $full_img_url ); ?>"
+              >
+              <?php if ( ! empty( $img_caption ) ) : ?>
+                <div class="yacht-gallery-caption"><?php echo esc_html( $img_caption ); ?></div>
+              <?php endif; ?>
+            </a>
+          </div>
+          <?php endforeach; ?>
+        </div>
+        <!-- Navigation buttons -->
+        <div class="swiper-button-next"></div>
+        <div class="swiper-button-prev"></div>
+        <!-- Pagination -->
+        <div class="swiper-pagination"></div>
+      </div>
+    </div>
+    <?php endif; ?>
+  </section>
+
   <!-- QUICK SPEC BAR -->
   <section class="yacht-quick-specs">
     <ul>
@@ -268,56 +320,8 @@ if ( $price_on_application || empty( $asking_price ) ) {
   </section>
   <?php endif; ?>
 
-  <!-- MEDIA SECTION -->
-  <section class="yacht-media" id="yacht-media">
-    <?php if ( ! empty( $gallery_images ) && is_array( $gallery_images ) ) : ?>
-    <h2>Gallery</h2>
-    <div class="yacht-gallery-carousel-wrapper">
-      <div class="swiper yacht-gallery-carousel">
-        <div class="swiper-wrapper">
-          <?php foreach ( $gallery_images as $image ) : 
-            // Handle array structure: ['url' => '...', 'caption' => '...'] or just URL string
-            $img_url = is_array( $image ) ? ( $image['url'] ?? $image['largeImageURL'] ?? '' ) : $image;
-            $img_medium = is_array( $image ) ? ( $image['mediumImageURL'] ?? $img_url ) : $img_url;
-            $img_caption = is_array( $image ) ? ( $image['caption'] ?? '' ) : '';
-            
-            if ( empty( $img_url ) ) continue;
-          ?>
-          <div class="swiper-slide">
-            <?php 
-            // Ensure we have absolute URLs
-            $full_img_url = $img_url;
-            if ( ! empty( $img_url ) && ! preg_match( '/^https?:\/\//', $img_url ) ) {
-              $full_img_url = 'https://' . ltrim( $img_url, '/' );
-            }
-            ?>
-            <a href="<?php echo esc_url( $full_img_url ); ?>" 
-               class="yacht-gallery-item" 
-               data-glightbox="gallery:yacht-gallery"
-               <?php if ( ! empty( $img_caption ) ) : ?>
-               data-title="<?php echo esc_attr( $img_caption ); ?>"
-               <?php endif; ?>>
-              <img
-                src="<?php echo esc_url( $img_medium ?: $full_img_url ); ?>"
-                alt="<?php echo esc_attr( $img_caption ?: $yacht_title . ' image' ); ?>"
-                loading="lazy"
-                data-src="<?php echo esc_url( $full_img_url ); ?>"
-              >
-              <?php if ( ! empty( $img_caption ) ) : ?>
-                <div class="yacht-gallery-caption"><?php echo esc_html( $img_caption ); ?></div>
-              <?php endif; ?>
-            </a>
-          </div>
-          <?php endforeach; ?>
-        </div>
-        <!-- Navigation buttons -->
-        <div class="swiper-button-next"></div>
-        <div class="swiper-button-prev"></div>
-        <!-- Pagination -->
-        <div class="swiper-pagination"></div>
-      </div>
-    </div>
-    <?php endif; ?>
+  <!-- MEDIA SECTION - VIDEO -->
+  <section class="yacht-media-video" id="yacht-media">
 
     <!-- Optional video block -->
     <?php if ( ! empty( $videos ) && is_array( $videos ) ) : 
