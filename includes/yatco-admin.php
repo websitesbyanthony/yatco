@@ -135,7 +135,7 @@ function yatco_options_page() {
     echo '<p style="margin: 0; font-weight: bold; color: #856404;"><strong>📝 Test & Import:</strong> This button fetches the first active vessel from the YATCO API, displays its data structure, <strong>and creates a CPT post</strong> so you can preview how the template looks.</p>';
     echo '</div>';
     echo '<p>This is useful for testing the single yacht template before importing all vessels.</p>';
-    echo '<form method="post" id="yatco-test-vessel-form" action="' . esc_url( admin_url( 'admin.php?page=yatco' ) ) . '">';
+    echo '<form method="post" id="yatco-test-vessel-form">';
     wp_nonce_field( 'yatco_test_vessel', 'yatco_test_vessel_nonce' );
     // Use a unique button name to avoid conflicts with import buttons
     submit_button( '🔍 Fetch First Vessel & Create Test Post', 'secondary', 'yatco_test_vessel_data_only', false, array( 'id' => 'yatco-test-vessel-btn' ) );
@@ -144,10 +144,10 @@ function yatco_options_page() {
     // Check for test vessel button FIRST - handle it immediately and prevent other handlers
     // This will fetch vessel data AND create a CPT post for testing
     if ( isset( $_POST['yatco_test_vessel_data_only'] ) && ! empty( $_POST['yatco_test_vessel_data_only'] ) ) {
-        // Verify nonce separately
-        if ( ! check_admin_referer( 'yatco_test_vessel', 'yatco_test_vessel_nonce' ) ) {
-            echo '<div class="notice notice-error"><p>Security check failed. Please try again.</p></div>';
-        } elseif ( empty( $token ) ) {
+            // Verify nonce using wp_verify_nonce to avoid redirect issues
+            if ( ! isset( $_POST['yatco_test_vessel_nonce'] ) || ! wp_verify_nonce( $_POST['yatco_test_vessel_nonce'], 'yatco_test_vessel' ) ) {
+                echo '<div class="notice notice-error"><p>Security check failed. Please refresh the page and try again.</p></div>';
+            } elseif ( empty( $token ) ) {
             echo '<div class="notice notice-error"><p>Missing token. Please configure your API token first.</p></div>';
         } else {
             echo '<div class="notice notice-info" style="background: #e3f2fd; border-left: 4px solid #2196f3; padding: 12px; margin: 15px 0;">';
