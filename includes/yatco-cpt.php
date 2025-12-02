@@ -33,6 +33,9 @@ function yatco_create_cpt() {
     yatco_register_taxonomies();
     
     flush_rewrite_rules();
+    
+    // Set version so rewrite rules flush on next init
+    update_option( 'yatco_rewrite_version', '1.0' );
 }
 
 /**
@@ -143,6 +146,16 @@ function yatco_register_yacht_cpt() {
             'taxonomies'   => array(), // Explicitly don't register default taxonomies (category, post_tag)
         )
     );
+    
+    // Flush rewrite rules on first load after registration changes
+    // We check a version number to avoid flushing unnecessarily
+    $rewrite_version = get_option( 'yatco_rewrite_version', '0' );
+    $current_version = '1.0'; // Increment this if you change rewrite rules
+    
+    if ( $rewrite_version !== $current_version ) {
+        flush_rewrite_rules( false ); // false = soft flush (preserves other rewrite rules)
+        update_option( 'yatco_rewrite_version', $current_version );
+    }
 }
 
 // Register taxonomies on init (not just on activation)

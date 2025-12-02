@@ -1471,16 +1471,6 @@ function yatco_update_vessel_meta_box_callback( $post ) {
     echo '<p><a href="' . esc_url( $update_url ) . '" class="button button-primary button-large" style="width: 100%; text-align: center;">🔄 Update Vessel from YATCO</a></p>';
     
     echo '<p style="font-size: 11px; color: #666; margin-top: 10px;">This will update all meta fields, images, and taxonomy terms with the latest data from YATCO.</p>';
-    
-    // Display link to edit detailed specifications
-    $detailed_specs = get_post_meta( $post->ID, 'yacht_detailed_specifications', true );
-    if ( ! empty( $detailed_specs ) ) {
-        echo '<hr style="margin: 20px 0; border: none; border-top: 1px solid #ddd;">';
-        echo '<p style="font-size: 12px; color: #666; margin: 0;"><strong>📋 Overview / Detailed Specifications:</strong> Use the "Overview / Detailed Specifications" meta box below to edit this content.</p>';
-    } else {
-        echo '<hr style="margin: 20px 0; border: none; border-top: 1px solid #ddd;">';
-        echo '<p style="font-size: 12px; color: #666; margin: 0;">📋 No detailed specifications found. They will be imported when you update the vessel from YATCO.</p>';
-    }
 }
 
 /**
