@@ -154,7 +154,8 @@ function yatco_options_page() {
             echo '<div style="background: #f9f9f9; border: 1px solid #ddd; border-radius: 4px; padding: 20px; margin: 20px 0;">';
             echo '<h3>Step 1: Getting Active Vessel IDs (Read Only)</h3>';
             
-            $vessel_ids = yatco_get_active_vessel_ids( $token, 1 );
+            // Get multiple vessel IDs so we can try different ones if the first doesn't have FullSpecsAll data
+            $vessel_ids = yatco_get_active_vessel_ids( $token, 10 );
             
             if ( is_wp_error( $vessel_ids ) ) {
                 echo '<div class="notice notice-error"><p><strong>Error getting vessel IDs:</strong> ' . esc_html( $vessel_ids->get_error_message() ) . '</p></div>';
@@ -163,89 +164,81 @@ function yatco_options_page() {
                 echo '<div class="notice notice-error"><p><strong>Error:</strong> No vessel IDs returned. The API response may be empty or invalid.</p></div>';
                 echo '</div>';
             } else {
-                $first_vessel_id = $vessel_ids[0];
-                echo '<p><strong>✅ Success!</strong> Found first vessel ID: <code>' . esc_html( $first_vessel_id ) . '</code></p>';
+                echo '<p><strong>✅ Success!</strong> Found ' . count( $vessel_ids ) . ' vessel ID(s). Will try each one until we find one with accessible FullSpecsAll data.</p>';
                 
-                echo '<h3>Step 2: Fetching FullSpecsAll for Vessel ID ' . esc_html( $first_vessel_id ) . '</h3>';
+                // Try multiple vessel IDs until we find one with FullSpecsAll data
+                $found_vessel_id = null;
+                $fullspecs = null;
+                $response = null;
+                $tried_vessels = array();
                 
-                $endpoint = 'https://api.yatcoboss.com/api/v1/ForSale/Vessel/' . intval( $first_vessel_id ) . '/Details/FullSpecsAll';
-                echo '<p style="color: #666; font-size: 13px;">Endpoint: <code>' . esc_html( $endpoint ) . '</code></p>';
-                
-                $response = wp_remote_get(
-                    $endpoint,
-                    array(
-                        'headers' => array(
-                            'Authorization' => 'Basic ' . $token,
-                            'Accept'        => 'application/json',
-                        ),
-                        'timeout' => 30,
-                    )
-                );
-                
-                if ( is_wp_error( $response ) ) {
-                    echo '<div class="notice notice-error"><p><strong>WP_Remote Error:</strong> ' . esc_html( $response->get_error_message() ) . '</p></div>';
-                } else {
+                foreach ( $vessel_ids as $vessel_id ) {
+                    $tried_vessels[] = $vessel_id;
+                    echo '<h3>Step 2: Trying Vessel ID ' . esc_html( $vessel_id ) . '</h3>';
+                    
+                    $endpoint = 'https://api.yatcoboss.com/api/v1/ForSale/Vessel/' . intval( $vessel_id ) . '/Details/FullSpecsAll';
+                    echo '<p style="color: #666; font-size: 13px;">Endpoint: <code>' . esc_html( $endpoint ) . '</code></p>';
+                    
+                    $response = wp_remote_get(
+                        $endpoint,
+                        array(
+                            'headers' => array(
+                                'Authorization' => 'Basic ' . $token,
+                                'Accept'        => 'application/json',
+                            ),
+                            'timeout' => 30,
+                        )
+                    );
+                    
+                    if ( is_wp_error( $response ) ) {
+                        echo '<p style="color: #dc3232;">❌ WP_Remote Error: ' . esc_html( $response->get_error_message() ) . ' - Trying next vessel...</p>';
+                        continue;
+                    }
+                    
                     $response_code = wp_remote_retrieve_response_code( $response );
                     $response_body = wp_remote_retrieve_body( $response );
                     
-                    echo '<p><strong>Response Code:</strong> ' . esc_html( $response_code ) . '</p>';
-                    echo '<p><strong>Content-Type:</strong> ' . esc_html( wp_remote_retrieve_header( $response, 'content-type' ) ) . '</p>';
-                    echo '<p><strong>Response Length:</strong> ' . strlen( $response_body ) . ' characters</p>';
-                    
                     if ( 200 !== $response_code ) {
-                        echo '<div class="notice notice-error">';
-                        echo '<p><strong>HTTP Error:</strong> ' . esc_html( $response_code ) . '</p>';
-                        echo '<p><strong>Response Body:</strong></p>';
-                        echo '<div style="background: #fff; border: 1px solid #ccc; border-radius: 4px; padding: 15px; max-height: 400px; overflow: auto; font-family: monospace; font-size: 12px; white-space: pre-wrap; word-wrap: break-word;">';
-                        echo esc_html( substr( $response_body, 0, 2000 ) );
-                        if ( strlen( $response_body ) > 2000 ) {
-                            echo '<br/><br/><em>... (truncated, total length: ' . strlen( $response_body ) . ' characters)</em>';
-                        }
-                        echo '</div>';
-                        echo '</div>';
-                    } else {
-                        $fullspecs = json_decode( $response_body, true );
-                        $json_error = json_last_error();
-                        
-                        if ( $json_error !== JSON_ERROR_NONE ) {
-                            echo '<div class="notice notice-error">';
-                            echo '<p><strong>JSON Parse Error:</strong> ' . esc_html( json_last_error_msg() ) . ' (Error code: ' . $json_error . ')</p>';
-                            echo '<p><strong>Raw Response (first 2000 characters):</strong></p>';
-                            echo '<div style="background: #fff; border: 1px solid #ccc; border-radius: 4px; padding: 15px; max-height: 400px; overflow: auto; font-family: monospace; font-size: 12px; white-space: pre-wrap; word-wrap: break-word;">';
-                            echo esc_html( substr( $response_body, 0, 2000 ) );
-                            if ( strlen( $response_body ) > 2000 ) {
-                                echo '<br/><br/><em>... (truncated, total length: ' . strlen( $response_body ) . ' characters)</em>';
-                            }
-                            echo '</div>';
-                            
-                            if ( stripos( $response_body, '<html' ) !== false || stripos( $response_body, '<!DOCTYPE' ) !== false ) {
-                                echo '<p style="color: #d63638; font-weight: bold;"><strong>⚠️ Warning:</strong> The response appears to be HTML (possibly an error page) rather than JSON.</p>';
-                            }
-                            
-                            if ( empty( trim( $response_body ) ) ) {
-                                echo '<p style="color: #d63638; font-weight: bold;"><strong>⚠️ Warning:</strong> The response body is empty.</p>';
-                            }
-                            
-                            echo '<p><strong>First 100 characters:</strong></p>';
-                            echo '<div style="background: #f9f9f9; border: 1px solid #ddd; padding: 10px; font-family: monospace; font-size: 11px; white-space: pre-wrap; word-wrap: break-word;">';
-                            echo esc_html( substr( $response_body, 0, 100 ) );
-                            echo '</div>';
-                            
-                            echo '</div>';
-                        } elseif ( $fullspecs === null || empty( $fullspecs ) ) {
-                            echo '<div class="notice notice-warning" style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0;">';
-                            echo '<p style="font-size: 16px; font-weight: bold; margin: 0 0 10px 0;"><strong>⚠️ API Returned Null for Vessel ID ' . esc_html( $first_vessel_id ) . '</strong></p>';
-                            echo '<p>The YATCO API returned <code>null</code> for vessel ID <strong>' . esc_html( $first_vessel_id ) . '</strong>. This means the vessel data is not accessible via the FullSpecsAll endpoint.</p>';
-                            echo '<p><strong>Possible reasons:</strong></p>';
-                            echo '<ul style="margin-left: 20px; margin-top: 10px;">';
-                            echo '<li>The vessel may have been removed or is no longer active</li>';
-                            echo '<li>The vessel details may require different permissions</li>';
-                            echo '<li>The vessel ID may not have FullSpecsAll data available</li>';
-                            echo '</ul>';
-                            echo '<p style="margin-top: 15px;"><strong>💡 Solution:</strong> Try clicking the button again to fetch a different vessel. The next vessel ID in the list may have accessible data.</p>';
-                            echo '<p style="margin-top: 10px;">You can also manually import a specific vessel if you know its ID.</p>';
-                            echo '</div>';
-                        } else {
+                        echo '<p style="color: #dc3232;">❌ HTTP Error ' . esc_html( $response_code ) . ' - Trying next vessel...</p>';
+                        continue;
+                    }
+                    
+                    $fullspecs = json_decode( $response_body, true );
+                    $json_error = json_last_error();
+                    
+                    if ( $json_error !== JSON_ERROR_NONE ) {
+                        echo '<p style="color: #dc3232;">❌ JSON Parse Error: ' . esc_html( json_last_error_msg() ) . ' - Trying next vessel...</p>';
+                        continue;
+                    }
+                    
+                    if ( $fullspecs === null || empty( $fullspecs ) ) {
+                        echo '<p style="color: #ff9800;">⚠️ API returned null for vessel ID ' . esc_html( $vessel_id ) . ' - Trying next vessel...</p>';
+                        continue;
+                    }
+                    
+                    // Found one with data!
+                    $found_vessel_id = $vessel_id;
+                    echo '<p style="color: #46b450; font-weight: bold;">✅ Found vessel with accessible FullSpecsAll data: Vessel ID ' . esc_html( $found_vessel_id ) . '</p>';
+                    
+                    if ( count( $tried_vessels ) > 1 ) {
+                        echo '<p style="color: #666; font-size: 13px;">Note: Tried ' . count( $tried_vessels ) . ' vessel(s) before finding one with accessible data: ' . esc_html( implode( ', ', array_slice( $tried_vessels, 0, -1 ) ) ) . '</p>';
+                    }
+                    break;
+                }
+                
+                if ( ! $found_vessel_id || ! $fullspecs ) {
+                    echo '<div class="notice notice-error" style="background: #fce8e6; border-left: 4px solid #dc3232; padding: 15px; margin: 20px 0;">';
+                    echo '<p style="font-size: 16px; font-weight: bold; margin: 0 0 10px 0;"><strong>❌ No Accessible Vessels Found</strong></p>';
+                    echo '<p>Tried ' . count( $tried_vessels ) . ' vessel ID(s): <code>' . esc_html( implode( ', ', $tried_vessels ) ) . '</code></p>';
+                    echo '<p>None of these vessels have accessible FullSpecsAll data. This may indicate:</p>';
+                    echo '<ul style="margin-left: 20px; margin-top: 10px;">';
+                    echo '<li>Your API token may not have permissions to access FullSpecsAll data</li>';
+                    echo '<li>The vessels may have been removed or are restricted</li>';
+                    echo '<li>There may be a temporary API issue</li>';
+                    echo '</ul>';
+                    echo '<p style="margin-top: 15px;">Please verify your API token permissions or contact YATCO support.</p>';
+                    echo '</div>';
+                } else {
                             echo '<p><strong>✅ Success!</strong> FullSpecsAll data retrieved and parsed successfully.</p>';
                             
                             if ( is_array( $fullspecs ) && ! empty( $fullspecs ) ) {
@@ -253,12 +246,22 @@ function yatco_options_page() {
                                 echo '<p style="color: #666; font-size: 13px;">Data sections found: <strong>' . esc_html( count( $sections_found ) ) . '</strong> sections (' . esc_html( implode( ', ', array_slice( $sections_found, 0, 5 ) ) ) . ( count( $sections_found ) > 5 ? ', ...' : '' ) . ')</p>';
                             }
                             
-                            echo '<h3>Step 3: Importing Vessel to CPT</h3>';
-                            echo '<p>Now importing this vessel data into your Custom Post Type...</p>';
-                            
-                            require_once YATCO_PLUGIN_DIR . 'includes/yatco-helpers.php';
-                            
-                            $import_result = yatco_import_single_vessel( $token, $first_vessel_id );
+                    echo '<p><strong>Response Code:</strong> ' . esc_html( wp_remote_retrieve_response_code( $response ) ) . '</p>';
+                    echo '<p><strong>Content-Type:</strong> ' . esc_html( wp_remote_retrieve_header( $response, 'content-type' ) ) . '</p>';
+                    echo '<p><strong>Response Length:</strong> ' . strlen( wp_remote_retrieve_body( $response ) ) . ' characters</p>';
+                    echo '<p><strong>✅ Success!</strong> FullSpecsAll data retrieved and parsed successfully.</p>';
+                    
+                    if ( is_array( $fullspecs ) && ! empty( $fullspecs ) ) {
+                        $sections_found = array_keys( $fullspecs );
+                        echo '<p style="color: #666; font-size: 13px;">Data sections found: <strong>' . esc_html( count( $sections_found ) ) . '</strong> sections (' . esc_html( implode( ', ', array_slice( $sections_found, 0, 5 ) ) ) . ( count( $sections_found ) > 5 ? ', ...' : '' ) . ')</p>';
+                    }
+                    
+                    echo '<h3>Step 3: Importing Vessel to CPT</h3>';
+                    echo '<p>Now importing vessel ID ' . esc_html( $found_vessel_id ) . ' data into your Custom Post Type...</p>';
+                    
+                    require_once YATCO_PLUGIN_DIR . 'includes/yatco-helpers.php';
+                    
+                    $import_result = yatco_import_single_vessel( $token, $found_vessel_id );
                             
                             if ( is_wp_error( $import_result ) ) {
                                 echo '<div class="notice notice-error">';
