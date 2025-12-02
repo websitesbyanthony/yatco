@@ -1,10 +1,15 @@
 <?php
 /**
  * Plugin Name: YATCO Custom Integration
+ * Plugin URI: https://github.com/yatco/yatco-integration
  * Description: Fetch selected YATCO vessels into a Yacht custom post type.
  * Version: 3.1
  * Author: Your Name
+ * Author URI: https://example.com
  * License: GPL-2.0+
+ * License URI: http://www.gnu.org/licenses/gpl-2.0.txt
+ * Text Domain: yatco
+ * Domain Path: /languages
  */
 
 if ( ! defined( 'ABSPATH' ) ) {

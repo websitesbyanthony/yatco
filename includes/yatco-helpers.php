@@ -64,11 +64,13 @@ function yatco_build_brief_from_fullspecs( $vessel_id, $full ) {
     $basic  = isset( $full['BasicInfo'] ) ? $full['BasicInfo'] : array();
     $dims   = isset( $full['Dimensions'] ) ? $full['Dimensions'] : array();
 
-    // Vessel name: Check Result.VesselName, then BasicInfo.BoatName.
-    if ( ! empty( $result['VesselName'] ) ) {
-        $name = $result['VesselName'];
-    } elseif ( ! empty( $basic['BoatName'] ) ) {
+    // Vessel name: Prefer BasicInfo.BoatName (better case formatting), then Result.VesselName.
+    // BasicInfo.BoatName usually has proper case like "25' Scarab 255 Open ID"
+    // Result.VesselName is often all caps like "25' SCARAB 255 OPEN ID"
+    if ( ! empty( $basic['BoatName'] ) ) {
         $name = $basic['BoatName'];
+    } elseif ( ! empty( $result['VesselName'] ) ) {
+        $name = $result['VesselName'];
     }
 
     // Price: Prefer USD price from BasicInfo, fallback to Result.AskingPriceCompare.
@@ -167,11 +169,13 @@ function yatco_import_single_vessel( $token, $vessel_id ) {
     $class  = '';
     $desc   = '';
 
-    // Vessel name: Check Result.VesselName, then BasicInfo.BoatName.
-    if ( ! empty( $result['VesselName'] ) ) {
-        $name = $result['VesselName'];
-    } elseif ( ! empty( $basic['BoatName'] ) ) {
+    // Vessel name: Prefer BasicInfo.BoatName (better case formatting), then Result.VesselName.
+    // BasicInfo.BoatName usually has proper case like "25' Scarab 255 Open ID"
+    // Result.VesselName is often all caps like "25' SCARAB 255 OPEN ID"
+    if ( ! empty( $basic['BoatName'] ) ) {
         $name = $basic['BoatName'];
+    } elseif ( ! empty( $result['VesselName'] ) ) {
+        $name = $result['VesselName'];
     }
 
     // Price: Prefer USD price from BasicInfo, fallback to Result.AskingPriceCompare.
@@ -292,9 +296,47 @@ function yatco_import_single_vessel( $token, $vessel_id ) {
         }
     }
 
+    // Build full title: "BoatName Year Length' BUILDER Category"
+    // Example: "Fontana 2012 92' SANLORENZO YACHTS Motor Yacht"
+    $title_parts = array();
+    
+    // Boat name (trimmed)
+    if ( ! empty( $name ) ) {
+        $title_parts[] = trim( $name );
+    }
+    
+    // Year
+    if ( ! empty( $year ) ) {
+        $title_parts[] = $year;
+    }
+    
+    // Length in feet (e.g., "92'")
+    if ( ! empty( $loa ) && is_numeric( $loa ) ) {
+        $title_parts[] = intval( $loa ) . "'";
+    }
+    
+    // Builder name (uppercase)
+    if ( ! empty( $make ) ) {
+        $title_parts[] = strtoupper( trim( $make ) );
+    }
+    
+    // Category (e.g., "Motor Yacht")
+    if ( ! empty( $class ) ) {
+        $title_parts[] = trim( $class );
+    }
+    
+    // Build the title, or fallback to boat name, or vessel ID
+    if ( ! empty( $title_parts ) ) {
+        $full_title = implode( ' ', $title_parts );
+    } elseif ( ! empty( $name ) ) {
+        $full_title = trim( $name );
+    } else {
+        $full_title = 'Yacht ' . $vessel_id;
+    }
+    
     $post_data = array(
         'post_type'   => 'yacht',
-        'post_title'  => $name ? $name : 'Yacht ' . $vessel_id,
+        'post_title'  => $full_title,
         'post_status' => 'publish',
     );
 
