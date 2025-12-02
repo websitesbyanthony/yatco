@@ -358,6 +358,11 @@ function yatco_import_single_vessel( $token, $vessel_id ) {
     // Store core meta – these can be mapped to ACF fields.
     update_post_meta( $post_id, 'yacht_mlsid', $mlsid );
     update_post_meta( $post_id, 'yacht_vessel_id', $vessel_id ); // Store vessel ID for reference
+    
+    // Store YATCO listing URL for easy access in admin
+    $yatco_listing_id = ! empty( $mlsid ) ? $mlsid : $vessel_id;
+    $yatco_listing_url = 'https://www.yatcoboss.com/yacht/' . $yatco_listing_id . '/';
+    update_post_meta( $post_id, 'yacht_yatco_listing_url', $yatco_listing_url );
     update_post_meta( $post_id, 'yacht_price', $price_formatted_display ); // Save formatted price string
     update_post_meta( $post_id, 'yacht_price_usd', $price_usd );
     update_post_meta( $post_id, 'yacht_price_eur', $price_eur );

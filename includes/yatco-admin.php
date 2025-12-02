@@ -341,6 +341,7 @@ function yatco_options_page() {
     $pre_is_warming_scheduled = wp_next_scheduled( 'yatco_warm_cache_hook' );
     
     $pre_button_disabled = false;
+    $pre_is_stuck = false;
     
     if ( $pre_cache_progress !== false && is_array( $pre_cache_progress ) && ! empty( $pre_cache_progress ) ) {
         $pre_last_processed = isset( $pre_cache_progress['last_processed'] ) ? intval( $pre_cache_progress['last_processed'] ) : 0;
@@ -348,22 +349,53 @@ function yatco_options_page() {
         $pre_timestamp = isset( $pre_cache_progress['timestamp'] ) ? intval( $pre_cache_progress['timestamp'] ) : 0;
         
         if ( $pre_total > 0 && $pre_last_processed < $pre_total ) {
-            if ( $pre_timestamp > 0 && ( time() - $pre_timestamp ) < 30 ) {
+            // Check if progress is stuck (hasn't been updated in more than 2 minutes)
+            if ( $pre_timestamp > 0 && ( time() - $pre_timestamp > 120 ) ) {
+                // Progress is stuck - auto-clear it
+                $pre_is_stuck = true;
+                delete_transient( 'yatco_cache_warming_progress' );
+                delete_transient( 'yatco_cache_warming_status' );
+                $pre_cache_progress = false;
+                $pre_cache_status = false;
+                $pre_button_disabled = false;
+            } elseif ( $pre_timestamp > 0 && ( time() - $pre_timestamp ) < 30 ) {
+                // Progress is recent (less than 30 seconds) - assume it's running
                 $pre_button_disabled = true;
             } else {
-                if ( $pre_timestamp > 0 && ( time() - $pre_timestamp ) > 60 ) {
-                    delete_transient( 'yatco_cache_warming_progress' );
-                    delete_transient( 'yatco_cache_warming_status' );
-                    $pre_cache_progress = false;
-                    $pre_cache_status = false;
-                    $pre_button_disabled = false;
-                }
+                // Progress is 30-120 seconds old - might be stuck, but don't disable
+                $pre_button_disabled = false;
             }
+        } elseif ( $pre_total > 0 && $pre_last_processed >= $pre_total ) {
+            // Import appears complete - clear progress data
+            delete_transient( 'yatco_cache_warming_progress' );
+            delete_transient( 'yatco_cache_warming_status' );
+            $pre_cache_progress = false;
+            $pre_cache_status = false;
+            $pre_button_disabled = false;
+        } elseif ( empty( $pre_cache_progress ) || ( $pre_total === 0 && $pre_last_processed === 0 ) ) {
+            // Empty or invalid progress - clear it
+            delete_transient( 'yatco_cache_warming_progress' );
+            delete_transient( 'yatco_cache_warming_status' );
+            $pre_cache_progress = false;
+            $pre_cache_status = false;
+            $pre_button_disabled = false;
         }
+    }
+    
+    // Also check if there's a scheduled event that's in the past (shouldn't disable button)
+    if ( $pre_is_warming_scheduled && $pre_is_warming_scheduled < time() ) {
+        // Scheduled event is in the past - clear it
+        wp_clear_scheduled_hook( 'yatco_warm_cache_hook' );
+        $pre_is_warming_scheduled = false;
     }
     
     echo '<div style="background: #fff; border: 2px solid #2271b1; border-radius: 4px; padding: 20px; margin: 20px 0;">';
     echo '<h3 style="margin-top: 0; color: #2271b1;">📥 Import Vessels to CPT</h3>';
+    
+    // Show notice if stuck progress was auto-cleared
+    if ( $pre_is_stuck ) {
+        echo '<div class="notice notice-warning" style="margin-bottom: 15px;"><p><strong>⚠️ Stuck progress detected and cleared.</strong> The previous import appears to have stopped. You can now start a new import.</p></div>';
+    }
     
     echo '<div style="display: flex; gap: 15px; align-items: center; margin: 15px 0; flex-wrap: wrap;">';
     
@@ -1355,24 +1387,39 @@ function yatco_update_vessel_meta_box_callback( $post ) {
         return;
     }
     
-    // Build YATCO listing URL - prefer MLSID if available, otherwise use VesselID
-    $yatco_listing_id = ! empty( $mlsid ) ? $mlsid : $vessel_id;
-    // Common YATCO listing URL formats - try yatcoboss.com first
-    $yatco_listing_url = 'https://www.yatcoboss.com/yacht/' . esc_attr( $yatco_listing_id ) . '/';
-    
-    // Display link to original YATCO listing
-    echo '<div style="background: #f0f6fc; border-left: 4px solid #2271b1; padding: 12px; margin-bottom: 15px;">';
-    echo '<p style="margin: 0 0 8px 0; font-weight: bold; color: #2271b1;">🔗 View on YATCO</p>';
-    echo '<p style="margin: 0; font-size: 12px; color: #666;">';
-    if ( ! empty( $mlsid ) ) {
-        echo 'MLS ID: <strong>' . esc_html( $mlsid ) . '</strong><br />';
+    // Get YATCO listing URL from stored meta, or build it if not stored
+    $yatco_listing_url = get_post_meta( $post->ID, 'yacht_yatco_listing_url', true );
+    if ( empty( $yatco_listing_url ) ) {
+        // Build YATCO listing URL - prefer MLSID if available, otherwise use VesselID
+        $yatco_listing_id = ! empty( $mlsid ) ? $mlsid : $vessel_id;
+        // Common YATCO listing URL formats - try yatcoboss.com first
+        $yatco_listing_url = 'https://www.yatcoboss.com/yacht/' . esc_attr( $yatco_listing_id ) . '/';
+        // Save it for future use
+        update_post_meta( $post->ID, 'yacht_yatco_listing_url', $yatco_listing_url );
     }
-    echo 'Vessel ID: <strong>' . esc_html( $vessel_id ) . '</strong>';
-    echo '</p>';
-    echo '<p style="margin: 8px 0 0 0;">';
-    echo '<a href="' . esc_url( $yatco_listing_url ) . '" target="_blank" rel="noopener noreferrer" class="button button-secondary" style="width: 100%; text-align: center;">';
-    echo '🌐 Open Original Listing';
+    
+    // Display link to original YATCO listing - make it very visible
+    echo '<div style="background: #f0f6fc; border-left: 4px solid #2271b1; padding: 15px; margin-bottom: 20px; border-radius: 4px;">';
+    echo '<p style="margin: 0 0 12px 0; font-weight: bold; font-size: 14px; color: #2271b1;">🔗 View Original Listing on YATCO</p>';
+    
+    // Show IDs for reference
+    echo '<div style="margin-bottom: 12px; padding: 8px; background: #fff; border-radius: 3px; font-size: 12px;">';
+    if ( ! empty( $mlsid ) ) {
+        echo '<strong>MLS ID:</strong> <code style="background: #f5f5f5; padding: 2px 6px; border-radius: 3px;">' . esc_html( $mlsid ) . '</code><br />';
+    }
+    echo '<strong>Vessel ID:</strong> <code style="background: #f5f5f5; padding: 2px 6px; border-radius: 3px;">' . esc_html( $vessel_id ) . '</code>';
+    echo '</div>';
+    
+    // Large, prominent link button
+    echo '<p style="margin: 0;">';
+    echo '<a href="' . esc_url( $yatco_listing_url ) . '" target="_blank" rel="noopener noreferrer" class="button button-primary" style="width: 100%; text-align: center; padding: 10px; font-size: 14px; font-weight: bold; text-decoration: none; display: block; box-sizing: border-box;">';
+    echo '🌐 Open Original YATCO Listing';
     echo '</a>';
+    echo '</p>';
+    
+    // Also show the URL as a clickable link below
+    echo '<p style="margin: 8px 0 0 0; font-size: 11px; color: #666; word-break: break-all;">';
+    echo 'Link: <a href="' . esc_url( $yatco_listing_url ) . '" target="_blank" rel="noopener noreferrer" style="color: #2271b1; text-decoration: underline;">' . esc_html( $yatco_listing_url ) . '</a>';
     echo '</p>';
     echo '</div>';
     
