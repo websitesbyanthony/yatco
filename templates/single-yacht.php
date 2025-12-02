@@ -351,57 +351,46 @@ if ( $price_on_application || empty( $asking_price ) ) {
   if ( empty( $post_content ) && ! empty( $description ) ) {
     $post_content = $description;
   }
-  ?>
-  <?php if ( ! empty( $post_content ) ) : ?>
-  <section class="yacht-description">
-    <div class="yacht-description-content">
-      <?php echo $post_content; ?>
-    </div>
-  </section>
-  <?php endif; ?>
-
-  <?php 
-  // Display detailed specifications (Overview, Equipment, Features, etc.) in a collapsible toggle
+  
+  // Check if we have content to display in the two-column layout
+  $has_description = ! empty( $post_content );
   $detailed_specs = yacht_meta( 'yacht_detailed_specifications', '' );
-  if ( ! empty( $detailed_specs ) ) : 
+  $has_detailed_specs = ! empty( $detailed_specs );
+  $has_specs_content = $boat_name || $loa || $loa_feet || $loa_meters || $builder || $model || $year_built || $vessel_type || $category_display || $hull_material || $location_display || $asking_price_formatted || $beam || $gross_tonnage || $state_rooms || $heads || $sleeps || $berths || $engine_count || $engine_manufacturer || $engine_model || $engine_type || $engine_fuel_type || $engine_horsepower || $cruise_speed || $max_speed || $fuel_capacity || $water_capacity || $holding_tank;
   ?>
-  <section class="yacht-detailed-specs-toggle">
-    <button class="yacht-toggle-button" type="button" aria-expanded="false" aria-controls="yacht-detailed-specs-content">
-      <span class="yacht-toggle-label">View Full Overview</span>
-      <span class="yacht-toggle-icon" aria-hidden="true">▼</span>
-    </button>
-    <div class="yacht-toggle-content" id="yacht-detailed-specs-content" aria-hidden="true">
-      <div class="yacht-detailed-specs-content">
-        <?php echo yacht_output_html( $detailed_specs ); ?>
+
+  <!-- Two-column layout wrapper -->
+  <?php if ( $has_description || $has_detailed_specs || $has_specs_content ) : ?>
+  <section class="yacht-content-layout">
+    <!-- Left Column: Description (70%) -->
+    <div class="yacht-content-main">
+      <?php if ( $has_description ) : ?>
+      <div class="yacht-description">
+        <div class="yacht-description-content">
+          <?php echo $post_content; ?>
+        </div>
       </div>
-    </div>
-  </section>
-  <?php endif; ?>
+      <?php endif; ?>
 
-  <!-- MEDIA SECTION - VIDEO -->
-  <section class="yacht-media-video" id="yacht-media">
-
-    <!-- Optional video block -->
-    <?php if ( ! empty( $videos ) && is_array( $videos ) ) : 
-      $first_video = is_array( $videos[0] ) ? ( $videos[0]['VideoUrl'] ?? $videos[0]['url'] ?? '' ) : $videos[0];
-    ?>
-    <div class="yacht-video" id="yacht-video">
-      <h3>Video</h3>
-      <div class="yacht-video-embed">
-        <?php if ( $first_video ) : ?>
-        <iframe
-          src="<?php echo esc_url( $first_video ); ?>"
-          frameborder="0"
-          allowfullscreen
-        ></iframe>
-        <?php endif; ?>
+      <?php if ( $has_detailed_specs ) : ?>
+      <div class="yacht-detailed-specs-toggle">
+        <button class="yacht-toggle-button" type="button" aria-expanded="false" aria-controls="yacht-detailed-specs-content">
+          <span class="yacht-toggle-label">View Full Overview</span>
+          <span class="yacht-toggle-icon" aria-hidden="true">▼</span>
+        </button>
+        <div class="yacht-toggle-content" id="yacht-detailed-specs-content" aria-hidden="true">
+          <div class="yacht-detailed-specs-content">
+            <?php echo yacht_output_html( $detailed_specs ); ?>
+          </div>
+        </div>
       </div>
+      <?php endif; ?>
     </div>
-    <?php endif; ?>
-  </section>
 
-  <!-- SPECIFICATIONS -->
-  <section class="yacht-specs">
+    <!-- Right Column: Specifications (30%) -->
+    <?php if ( $has_specs_content ) : ?>
+    <div class="yacht-content-sidebar">
+      <section class="yacht-specs">
     <h2>Specifications</h2>
     <div class="yacht-specs-grid">
 
@@ -645,7 +634,32 @@ if ( $price_on_application || empty( $asking_price ) ) {
       <?php endif; ?>
 
 
+      </div>
+      </section>
     </div>
+    <?php endif; ?>
+  </section>
+  <?php endif; ?>
+
+  <!-- MEDIA SECTION - VIDEO -->
+  <section class="yacht-media-video" id="yacht-media">
+    <!-- Optional video block -->
+    <?php if ( ! empty( $videos ) && is_array( $videos ) ) : 
+      $first_video = is_array( $videos[0] ) ? ( $videos[0]['VideoUrl'] ?? $videos[0]['url'] ?? '' ) : $videos[0];
+    ?>
+    <div class="yacht-video" id="yacht-video">
+      <h3>Video</h3>
+      <div class="yacht-video-embed">
+        <?php if ( $first_video ) : ?>
+        <iframe
+          src="<?php echo esc_url( $first_video ); ?>"
+          frameborder="0"
+          allowfullscreen
+        ></iframe>
+        <?php endif; ?>
+      </div>
+    </div>
+    <?php endif; ?>
   </section>
 
   <!-- STATUS STRIP -->
@@ -994,11 +1008,50 @@ if ( $price_on_application || empty( $asking_price ) ) {
     color: #fff;
   }
 
-/* Description Section Styles */
-.yacht-description {
+/* Two-Column Content Layout */
+.yacht-content-layout {
   max-width: 1200px;
   margin: 0 auto;
   padding: 40px 20px;
+  display: flex;
+  gap: 40px;
+  align-items: flex-start;
+}
+
+.yacht-content-main {
+  flex: 0 0 70%;
+  width: 70%;
+}
+
+.yacht-content-sidebar {
+  flex: 0 0 30%;
+  width: 30%;
+  position: sticky;
+  top: 20px;
+}
+
+/* Responsive: Stack on mobile */
+@media (max-width: 768px) {
+  .yacht-content-layout {
+    flex-direction: column;
+    gap: 30px;
+  }
+  
+  .yacht-content-main,
+  .yacht-content-sidebar {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+  
+  .yacht-content-sidebar {
+    position: static;
+  }
+}
+
+/* Description Section Styles */
+.yacht-description {
+  margin-bottom: 30px;
+  padding: 0;
 }
 
 .yacht-description-content {
@@ -1051,9 +1104,8 @@ if ( $price_on_application || empty( $asking_price ) ) {
 
 /* Detailed Specifications Toggle Styles */
 .yacht-detailed-specs-toggle {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 0 20px 40px;
+  margin-bottom: 30px;
+  padding: 0;
 }
 
 .yacht-toggle-button {
@@ -1160,6 +1212,91 @@ if ( $price_on_application || empty( $asking_price ) ) {
 
 .yacht-detailed-specs-content a:hover {
   color: #005a87;
+}
+
+/* Specifications Sidebar Styles */
+.yacht-content-sidebar .yacht-specs {
+  background: #f9f9f9;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 25px;
+  margin: 0;
+}
+
+.yacht-content-sidebar .yacht-specs h2 {
+  margin-top: 0;
+  margin-bottom: 20px;
+  font-size: 1.5rem;
+  color: #333;
+  border-bottom: 2px solid #0073aa;
+  padding-bottom: 10px;
+}
+
+.yacht-specs-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 25px;
+}
+
+.yacht-spec-group {
+  border-bottom: 1px solid #e0e0e0;
+  padding-bottom: 20px;
+}
+
+.yacht-spec-group:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.yacht-spec-group h3 {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: #0073aa;
+  margin-top: 0;
+  margin-bottom: 15px;
+}
+
+.yacht-spec-group dl {
+  margin: 0;
+  padding: 0;
+}
+
+.yacht-spec-group dl > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 8px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.yacht-spec-group dl > div:last-child {
+  border-bottom: none;
+}
+
+.yacht-spec-group dt {
+  font-weight: 600;
+  color: #555;
+  margin: 0;
+  padding-right: 15px;
+  flex: 0 0 45%;
+  font-size: 0.95rem;
+}
+
+.yacht-spec-group dd {
+  margin: 0;
+  flex: 1;
+  text-align: right;
+  color: #333;
+  font-size: 0.95rem;
+}
+
+.yacht-spec-group dd a {
+  color: #0073aa;
+  text-decoration: none;
+}
+
+.yacht-spec-group dd a:hover {
+  text-decoration: underline;
 }
 
 @media (max-width: 1024px) {
