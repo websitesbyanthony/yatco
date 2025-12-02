@@ -1348,11 +1348,33 @@ function yatco_add_update_vessel_meta_box() {
 function yatco_update_vessel_meta_box_callback( $post ) {
     // Check if this is a YATCO vessel
     $vessel_id = get_post_meta( $post->ID, 'yacht_vessel_id', true );
+    $mlsid = get_post_meta( $post->ID, 'yacht_mlsid', true );
     
     if ( empty( $vessel_id ) ) {
         echo '<p>This yacht post does not have a YATCO vessel ID. It may not have been imported from YATCO.</p>';
         return;
     }
+    
+    // Build YATCO listing URL - prefer MLSID if available, otherwise use VesselID
+    $yatco_listing_id = ! empty( $mlsid ) ? $mlsid : $vessel_id;
+    // Common YATCO listing URL formats - try yatcoboss.com first
+    $yatco_listing_url = 'https://www.yatcoboss.com/yacht/' . esc_attr( $yatco_listing_id ) . '/';
+    
+    // Display link to original YATCO listing
+    echo '<div style="background: #f0f6fc; border-left: 4px solid #2271b1; padding: 12px; margin-bottom: 15px;">';
+    echo '<p style="margin: 0 0 8px 0; font-weight: bold; color: #2271b1;">🔗 View on YATCO</p>';
+    echo '<p style="margin: 0; font-size: 12px; color: #666;">';
+    if ( ! empty( $mlsid ) ) {
+        echo 'MLS ID: <strong>' . esc_html( $mlsid ) . '</strong><br />';
+    }
+    echo 'Vessel ID: <strong>' . esc_html( $vessel_id ) . '</strong>';
+    echo '</p>';
+    echo '<p style="margin: 8px 0 0 0;">';
+    echo '<a href="' . esc_url( $yatco_listing_url ) . '" target="_blank" rel="noopener noreferrer" class="button button-secondary" style="width: 100%; text-align: center;">';
+    echo '🌐 Open Original Listing';
+    echo '</a>';
+    echo '</p>';
+    echo '</div>';
     
     $token = yatco_get_token();
     if ( empty( $token ) ) {
