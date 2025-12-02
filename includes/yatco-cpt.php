@@ -25,6 +25,7 @@ function yatco_create_cpt() {
             'rewrite'      => array( 'slug' => 'yachts' ),
             'supports'     => array( 'title', 'editor', 'thumbnail', 'custom-fields' ),
             'show_in_rest' => true,
+            'taxonomies'   => array(), // Explicitly don't register default taxonomies (category, post_tag)
         )
     );
     
@@ -33,6 +34,23 @@ function yatco_create_cpt() {
     
     flush_rewrite_rules();
 }
+
+/**
+ * Remove default WordPress taxonomies (category, post_tag) from yacht post type.
+ * Runs after init to ensure other plugins (like ACF) have finished registering taxonomies.
+ */
+function yatco_unregister_default_taxonomies() {
+    // Unregister default category taxonomy for yacht post type (if registered)
+    if ( taxonomy_exists( 'category' ) && is_object_in_taxonomy( 'yacht', 'category' ) ) {
+        unregister_taxonomy_for_object_type( 'category', 'yacht' );
+    }
+    // Unregister default post_tag taxonomy for yacht post type (if registered)
+    if ( taxonomy_exists( 'post_tag' ) && is_object_in_taxonomy( 'yacht', 'post_tag' ) ) {
+        unregister_taxonomy_for_object_type( 'post_tag', 'yacht' );
+    }
+}
+// Run after init to ensure other plugins have registered their taxonomies first
+add_action( 'init', 'yatco_unregister_default_taxonomies', 99 );
 
 /**
  * Register custom taxonomies for Builder, Vessel Type, and Category.
@@ -57,6 +75,7 @@ function yatco_register_taxonomies() {
             'hierarchical'      => false, // Non-hierarchical (like tags)
             'rewrite'           => array( 'slug' => 'yacht-builder' ),
             'query_var'         => true,
+            'show_admin_column' => true, // Show in post list table
         )
     );
     
@@ -78,6 +97,7 @@ function yatco_register_taxonomies() {
             'hierarchical'      => false,
             'rewrite'           => array( 'slug' => 'yacht-type' ),
             'query_var'         => true,
+            'show_admin_column' => true, // Show in post list table
         )
     );
     
@@ -88,8 +108,8 @@ function yatco_register_taxonomies() {
         array(
             'labels'            => array(
                 'name'          => 'Yacht Categories',
-                'singular_name' => 'Category',
-                'menu_name'     => 'Categories',
+                'singular_name' => 'Yacht Category',
+                'menu_name'     => 'Yacht Categories', // Changed from 'Categories' to avoid confusion
             ),
             'public'            => true,
             'show_ui'           => true,
@@ -99,6 +119,8 @@ function yatco_register_taxonomies() {
             'hierarchical'      => true, // Hierarchical (like categories) - allows sub-categories
             'rewrite'           => array( 'slug' => 'yacht-category' ),
             'query_var'         => true,
+            'meta_box_cb'       => 'post_categories_meta_box', // Use standard category meta box style
+            'show_admin_column' => true, // Show in post list table
         )
     );
 }

@@ -462,7 +462,12 @@ function yatco_import_single_vessel( $token, $vessel_id ) {
     $price_eur = isset( $basic['AskingPrice'] ) && $basic['AskingPrice'] > 0 && isset( $basic['Currency'] ) && $basic['Currency'] === 'EUR' ? floatval( $basic['AskingPrice'] ) : null;
     
     // Get additional metadata
-    $category = isset( $basic['MainCategory'] ) ? $basic['MainCategory'] : ( isset( $result['MainCategoryText'] ) ? $result['MainCategoryText'] : '' );
+    // Category: use $class if already set, otherwise get from BasicInfo/Result
+    if ( empty( $class ) ) {
+        $category = isset( $basic['MainCategory'] ) ? $basic['MainCategory'] : ( isset( $result['MainCategoryText'] ) ? $result['MainCategoryText'] : '' );
+    } else {
+        $category = $class; // Use $class which was set earlier from MainCategory
+    }
     $type = isset( $basic['VesselTypeText'] ) ? $basic['VesselTypeText'] : ( isset( $result['VesselTypeText'] ) ? $result['VesselTypeText'] : '' );
     $condition = isset( $result['VesselCondition'] ) ? $result['VesselCondition'] : '';
     $location = isset( $basic['LocationCustom'] ) ? $basic['LocationCustom'] : '';
@@ -597,21 +602,38 @@ function yatco_import_single_vessel( $token, $vessel_id ) {
         wp_set_object_terms( $post_id, $type, 'yacht_vessel_type', false );
     }
     
-    // Category
-    if ( ! empty( $category ) ) {
-        wp_set_object_terms( $post_id, $category, 'yacht_category', false );
+    // Category - use $class if $category is empty (they should be the same, but $class is set earlier)
+    $category_for_taxonomy = ! empty( $category ) ? trim( $category ) : ( ! empty( $class ) ? trim( $class ) : '' );
+    if ( ! empty( $category_for_taxonomy ) ) {
+        // Use append=false to replace existing terms (ensures clean assignment)
+        // Pass as array to ensure proper handling - wp_set_object_terms will create term if it doesn't exist
+        $result = wp_set_object_terms( $post_id, array( $category_for_taxonomy ), 'yacht_category', false );
+        // Note: wp_set_object_terms returns term IDs on success, WP_Error on failure, or empty array if no terms
     }
     
     // Sub Category (if hierarchical categories are used)
-    if ( ! empty( $sub_category ) && ! empty( $category ) ) {
+    if ( ! empty( $sub_category ) && ! empty( $category_for_taxonomy ) ) {
         // Try to create as child term if parent exists
-        $parent_term = get_term_by( 'name', $category, 'yacht_category' );
+        $parent_term = get_term_by( 'name', $category_for_taxonomy, 'yacht_category' );
         if ( $parent_term ) {
-            $sub_term = wp_insert_term( $sub_category, 'yacht_category', array( 'parent' => $parent_term->term_id ) );
-            if ( ! is_wp_error( $sub_term ) ) {
-                wp_set_object_terms( $post_id, $sub_category, 'yacht_category', true );
+            $sub_category_trimmed = trim( $sub_category );
+            $sub_term = wp_insert_term( $sub_category_trimmed, 'yacht_category', array( 'parent' => $parent_term->term_id ) );
+            if ( ! is_wp_error( $sub_term ) && isset( $sub_term['term_id'] ) ) {
+                wp_set_object_terms( $post_id, array( (int) $sub_term['term_id'] ), 'yacht_category', true );
+            } elseif ( ! is_wp_error( $sub_term ) ) {
+                // Term might already exist, try to get it and assign
+                $existing_sub_term = get_term_by( 'name', $sub_category_trimmed, 'yacht_category' );
+                if ( $existing_sub_term ) {
+                    wp_set_object_terms( $post_id, array( (int) $existing_sub_term->term_id ), 'yacht_category', true );
+                }
             }
+        } elseif ( ! empty( $sub_category ) ) {
+            // If parent category doesn't exist, still assign sub-category as top-level term
+            wp_set_object_terms( $post_id, array( trim( $sub_category ) ), 'yacht_category', true );
         }
+    } elseif ( ! empty( $sub_category ) ) {
+        // If no main category, assign sub-category as top-level term
+        wp_set_object_terms( $post_id, array( trim( $sub_category ) ), 'yacht_category', true );
     }
 
     if ( ! empty( $desc ) ) {

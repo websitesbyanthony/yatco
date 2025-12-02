@@ -54,6 +54,37 @@ function yacht_output_html( $value, $default = '' ) {
     return wp_kses_post( $output );
 }
 
+// Helper function to get taxonomy term link or plain text
+function yacht_get_term_link( $taxonomy, $term_name, $post_id = 0 ) {
+    if ( empty( $term_name ) ) {
+        return '';
+    }
+    
+    if ( ! $post_id ) {
+        global $post_id;
+        if ( ! $post_id ) {
+            $post_id = get_the_ID();
+        }
+    }
+    
+    if ( ! $post_id ) {
+        return esc_html( $term_name );
+    }
+    
+    // Try to get the term by name
+    $term = get_term_by( 'name', $term_name, $taxonomy );
+    
+    if ( $term && ! is_wp_error( $term ) ) {
+        $term_link = get_term_link( $term );
+        if ( ! is_wp_error( $term_link ) ) {
+            return '<a href="' . esc_url( $term_link ) . '">' . esc_html( $term_name ) . '</a>';
+        }
+    }
+    
+    // Fallback to plain text if term not found
+    return esc_html( $term_name );
+}
+
 // Helper function to check if value exists and is not zero/empty
 function yacht_has_value( $value ) {
     return ! empty( $value ) && $value !== '0' && $value !== 0;
@@ -220,7 +251,22 @@ if ( $price_on_application || empty( $asking_price ) ) {
     <div class="yacht-info-columns">
       <div class="yacht-info-column">
         <div class="yacht-info-label">Category</div>
-        <div class="yacht-info-value"><?php echo yacht_output( $category_display ); ?></div>
+        <div class="yacht-info-value">
+          <?php
+          // Display category with links if multiple, or single link
+          if ( $main_category && $sub_category ) {
+            $main_link = yacht_get_term_link( 'yacht_category', $main_category, $post_id );
+            $sub_link = yacht_get_term_link( 'yacht_category', $sub_category, $post_id );
+            echo $main_link . ' / ' . $sub_link;
+          } elseif ( $main_category ) {
+            echo yacht_get_term_link( 'yacht_category', $main_category, $post_id );
+          } elseif ( $sub_category ) {
+            echo yacht_get_term_link( 'yacht_category', $sub_category, $post_id );
+          } else {
+            echo yacht_output( $category_display );
+          }
+          ?>
+        </div>
       </div>
       <div class="yacht-info-column">
         <div class="yacht-info-label">Price</div>
@@ -336,7 +382,7 @@ if ( $price_on_application || empty( $asking_price ) ) {
           <?php if ( $builder ) : ?>
           <div>
             <dt>Builder</dt>
-            <dd><?php echo yacht_output( $builder ); ?></dd>
+            <dd><?php echo yacht_get_term_link( 'yacht_builder', $builder, $post_id ); ?></dd>
           </div>
           <?php endif; ?>
           
@@ -357,14 +403,29 @@ if ( $price_on_application || empty( $asking_price ) ) {
           <?php if ( $vessel_type ) : ?>
           <div>
             <dt>Vessel Type</dt>
-            <dd><?php echo yacht_output( $vessel_type ); ?></dd>
+            <dd><?php echo yacht_get_term_link( 'yacht_vessel_type', $vessel_type, $post_id ); ?></dd>
           </div>
           <?php endif; ?>
           
           <?php if ( $category_display ) : ?>
           <div>
             <dt>Category</dt>
-            <dd><?php echo yacht_output( $category_display ); ?></dd>
+            <dd>
+              <?php
+              // Display category with links if multiple, or single link
+              if ( $main_category && $sub_category ) {
+                $main_link = yacht_get_term_link( 'yacht_category', $main_category, $post_id );
+                $sub_link = yacht_get_term_link( 'yacht_category', $sub_category, $post_id );
+                echo $main_link . ' / ' . $sub_link;
+              } elseif ( $main_category ) {
+                echo yacht_get_term_link( 'yacht_category', $main_category, $post_id );
+              } elseif ( $sub_category ) {
+                echo yacht_get_term_link( 'yacht_category', $sub_category, $post_id );
+              } else {
+                echo yacht_output( $category_display );
+              }
+              ?>
+            </dd>
           </div>
           <?php endif; ?>
           
