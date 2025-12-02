@@ -158,6 +158,7 @@ function yatco_import_single_vessel( $token, $vessel_id ) {
     $dims   = isset( $full['Dimensions'] ) ? $full['Dimensions'] : array();
     $vd     = isset( $full['VD'] ) ? $full['VD'] : array();
     $misc   = isset( $full['MiscInfo'] ) ? $full['MiscInfo'] : array();
+    $sections = isset( $full['Sections'] ) && is_array( $full['Sections'] ) ? $full['Sections'] : array();
 
     // Basic fields – updated to match actual API structure.
     $name   = '';
@@ -250,13 +251,53 @@ function yatco_import_single_vessel( $token, $vessel_id ) {
         $sub_category = $result['SubCategory'];
     }
 
-    // Description: From VD or MiscInfo.
-    if ( ! empty( $vd['VesselDescriptionShortDescriptionNoStyles'] ) ) {
-        $desc = $vd['VesselDescriptionShortDescriptionNoStyles'];
-    } elseif ( ! empty( $misc['VesselDescriptionShortDescription'] ) ) {
-        $desc = $misc['VesselDescriptionShortDescription'];
-    } elseif ( ! empty( $vd['VesselDescriptionShortDescription'] ) ) {
-        $desc = $vd['VesselDescriptionShortDescription'];
+    // Description: Build from Sections array (preserves h2/h3 headings), or fallback to short description.
+    // Sections contain structured content with headings that matches what's displayed on YATCO website.
+    $desc = '';
+    
+    if ( ! empty( $sections ) ) {
+        // Build description from Sections array - this preserves h2/h3 tags and structure
+        $desc_parts = array();
+        
+        // Sort sections by SortOrder if available
+        usort( $sections, function( $a, $b ) {
+            $order_a = isset( $a['SortOrder'] ) ? intval( $a['SortOrder'] ) : 999;
+            $order_b = isset( $b['SortOrder'] ) ? intval( $b['SortOrder'] ) : 999;
+            return $order_a - $order_b;
+        } );
+        
+        foreach ( $sections as $section ) {
+            if ( empty( $section['SectionText'] ) ) {
+                continue;
+            }
+            
+            $section_name = isset( $section['SectionName'] ) ? trim( $section['SectionName'] ) : '';
+            $section_text = trim( $section['SectionText'] );
+            
+            // If SectionText already contains h2/h3 tags, use it as-is
+            // Otherwise, wrap SectionName as h2 if it exists
+            if ( ! empty( $section_name ) && stripos( $section_text, '<h2' ) === false && stripos( $section_text, '<h3' ) === false ) {
+                // Add section name as h2 heading if the text doesn't already have headings
+                $desc_parts[] = '<h2>' . esc_html( $section_name ) . '</h2>';
+            }
+            
+            $desc_parts[] = $section_text;
+        }
+        
+        if ( ! empty( $desc_parts ) ) {
+            $desc = implode( "\n\n", $desc_parts );
+        }
+    }
+    
+    // Fallback to short description if Sections are empty or don't have content
+    if ( empty( $desc ) ) {
+        if ( ! empty( $vd['VesselDescriptionShortDescriptionNoStyles'] ) ) {
+            $desc = $vd['VesselDescriptionShortDescriptionNoStyles'];
+        } elseif ( ! empty( $misc['VesselDescriptionShortDescription'] ) ) {
+            $desc = $misc['VesselDescriptionShortDescription'];
+        } elseif ( ! empty( $vd['VesselDescriptionShortDescription'] ) ) {
+            $desc = $vd['VesselDescriptionShortDescription'];
+        }
     }
 
     // Find existing post by MLSID (primary) or VesselID (fallback).
