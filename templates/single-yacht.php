@@ -367,23 +367,13 @@ if ( $price_on_application || empty( $asking_price ) ) {
   ?>
   <section class="yacht-detailed-specs-toggle">
     <button class="yacht-toggle-button" type="button" aria-expanded="false" aria-controls="yacht-detailed-specs-content">
-      <span class="yacht-toggle-label">View Full Specifications</span>
+      <span class="yacht-toggle-label">View Full Overview</span>
       <span class="yacht-toggle-icon" aria-hidden="true">▼</span>
     </button>
     <div class="yacht-toggle-content" id="yacht-detailed-specs-content" aria-hidden="true">
       <div class="yacht-detailed-specs-content">
         <?php echo yacht_output_html( $detailed_specs ); ?>
       </div>
-    </div>
-  </section>
-  <?php endif; ?>
-
-  <!-- OVERVIEW / DESCRIPTION -->
-  <?php if ( $description ) : ?>
-  <section class="yacht-overview">
-    <h2>Overview</h2>
-    <div class="yacht-overview-body">
-      <?php echo yacht_output_html( $description ); ?>
     </div>
   </section>
   <?php endif; ?>
@@ -1414,7 +1404,7 @@ document.addEventListener('DOMContentLoaded', function() {
       // Update button text if needed
       const label = toggleButton.querySelector('.yacht-toggle-label');
       if (label) {
-        label.textContent = newExpanded ? 'Hide Full Specifications' : 'View Full Specifications';
+        label.textContent = newExpanded ? 'Hide Full Overview' : 'View Full Overview';
       }
     });
   }

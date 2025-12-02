@@ -319,7 +319,10 @@ function yatco_import_single_vessel( $token, $vessel_id ) {
             return $order_a - $order_b;
         } );
         
-        // Sections to exclude from description (these contain detailed specs to be shown in specifications section)
+        // Sections to include ONLY in description (typically just "Description")
+        $description_sections = array( 'Description' );
+        
+        // Sections to exclude from description (these contain detailed specs to be shown in specifications/overview section)
         $excluded_sections = array( 'Overview', 'Specifications', 'Equipment', 'Features' );
         
         foreach ( $sections as $section ) {
@@ -333,7 +336,7 @@ function yatco_import_single_vessel( $token, $vessel_id ) {
             // Strip inline CSS styles and class attributes from section text
             $section_text = yatco_strip_inline_styles_and_classes( $section_text );
             
-            // Check if this is an excluded section (case-insensitive)
+            // Check if this is an excluded section (case-insensitive) - these go to detailed specs
             $is_excluded = false;
             if ( ! empty( $section_name ) ) {
                 $section_name_lower = strtolower( $section_name );
@@ -346,17 +349,42 @@ function yatco_import_single_vessel( $token, $vessel_id ) {
             }
             
             if ( $is_excluded ) {
-                // Add to detailed specifications instead
+                // Add to detailed specifications (Overview, Equipment, Features, etc.)
                 if ( ! empty( $section_name ) && stripos( $section_text, '<h2' ) === false && stripos( $section_text, '<h3' ) === false ) {
                     $specs_parts[] = '<h2>' . esc_html( $section_name ) . '</h2>';
                 }
                 $specs_parts[] = $section_text;
             } else {
-                // Add to description
-                if ( ! empty( $section_name ) && stripos( $section_text, '<h2' ) === false && stripos( $section_text, '<h3' ) === false ) {
-                    $desc_parts[] = '<h2>' . esc_html( $section_name ) . '</h2>';
+                // Only add to description if it's explicitly a "Description" section or has no name
+                // This prevents other unnamed sections from appearing in description
+                $is_description_section = false;
+                if ( empty( $section_name ) ) {
+                    // Section with no name - include it in description (fallback)
+                    $is_description_section = true;
+                } else {
+                    $section_name_lower = strtolower( $section_name );
+                    foreach ( $description_sections as $desc_section ) {
+                        if ( $section_name_lower === strtolower( $desc_section ) ) {
+                            $is_description_section = true;
+                            break;
+                        }
+                    }
                 }
-                $desc_parts[] = $section_text;
+                
+                if ( $is_description_section ) {
+                    // Add to description
+                    if ( ! empty( $section_name ) && stripos( $section_text, '<h2' ) === false && stripos( $section_text, '<h3' ) === false ) {
+                        $desc_parts[] = '<h2>' . esc_html( $section_name ) . '</h2>';
+                    }
+                    $desc_parts[] = $section_text;
+                } else {
+                    // Unknown section - don't include it in either, or add to specs as fallback
+                    // For now, we'll add unknown sections to specs to be safe
+                    if ( ! empty( $section_name ) && stripos( $section_text, '<h2' ) === false && stripos( $section_text, '<h3' ) === false ) {
+                        $specs_parts[] = '<h2>' . esc_html( $section_name ) . '</h2>';
+                    }
+                    $specs_parts[] = $section_text;
+                }
             }
         }
         
@@ -424,40 +452,60 @@ function yatco_import_single_vessel( $token, $vessel_id ) {
 
     // Build full title: "BoatName Year Length' BUILDER Category"
     // Example: "Fontana 2012 92' SANLORENZO YACHTS Motor Yacht"
-    $title_parts = array();
+    // If the name already contains a year, use it as-is. Otherwise, build from specs.
     
-    // Boat name (trimmed)
-    if ( ! empty( $name ) ) {
-        $title_parts[] = trim( $name );
+    $full_title = '';
+    $name_trimmed = ! empty( $name ) ? trim( $name ) : '';
+    
+    // Check if the name already contains a year (4-digit number between 1900-2100)
+    $name_has_year = false;
+    if ( ! empty( $name_trimmed ) ) {
+        // Look for 4-digit years in the name (between 1900-2100)
+        if ( preg_match( '/\b(19|20)\d{2}\b/', $name_trimmed ) ) {
+            $name_has_year = true;
+        }
     }
     
-    // Year
-    if ( ! empty( $year ) ) {
-        $title_parts[] = $year;
-    }
-    
-    // Length in feet (e.g., "92'")
-    if ( ! empty( $loa ) && is_numeric( $loa ) ) {
-        $title_parts[] = intval( $loa ) . "'";
-    }
-    
-    // Builder name (uppercase)
-    if ( ! empty( $make ) ) {
-        $title_parts[] = strtoupper( trim( $make ) );
-    }
-    
-    // Category (e.g., "Motor Yacht")
-    if ( ! empty( $class ) ) {
-        $title_parts[] = trim( $class );
-    }
-    
-    // Build the title, or fallback to boat name, or vessel ID
-    if ( ! empty( $title_parts ) ) {
-        $full_title = implode( ' ', $title_parts );
-    } elseif ( ! empty( $name ) ) {
-        $full_title = trim( $name );
+    if ( $name_has_year && ! empty( $name_trimmed ) ) {
+        // Name already contains a year, use it as-is
+        $full_title = $name_trimmed;
     } else {
-        $full_title = 'Yacht ' . $vessel_id;
+        // Name doesn't contain a year, build full title from specs
+        $title_parts = array();
+        
+        // Boat name (trimmed)
+        if ( ! empty( $name_trimmed ) ) {
+            $title_parts[] = $name_trimmed;
+        }
+        
+        // Year
+        if ( ! empty( $year ) ) {
+            $title_parts[] = $year;
+        }
+        
+        // Length in feet (e.g., "92'")
+        if ( ! empty( $loa ) && is_numeric( $loa ) ) {
+            $title_parts[] = intval( $loa ) . "'";
+        }
+        
+        // Builder name (uppercase)
+        if ( ! empty( $make ) ) {
+            $title_parts[] = strtoupper( trim( $make ) );
+        }
+        
+        // Category (e.g., "Motor Yacht")
+        if ( ! empty( $class ) ) {
+            $title_parts[] = trim( $class );
+        }
+        
+        // Build the title, or fallback to boat name, or vessel ID
+        if ( ! empty( $title_parts ) ) {
+            $full_title = implode( ' ', $title_parts );
+        } elseif ( ! empty( $name_trimmed ) ) {
+            $full_title = $name_trimmed;
+        } else {
+            $full_title = 'Yacht ' . $vessel_id;
+        }
     }
     
     $post_data = array(
