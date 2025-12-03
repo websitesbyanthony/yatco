@@ -244,19 +244,33 @@ if ( $location_custom ) {
     // First try to replace using the stored country field if available
     if ( $location_country ) {
         $abbr_country = yacht_abbreviate_country( $location_country );
-        // Replace full country name with abbreviation in custom location string
+        // First ensure there's a comma before the country if state and country are together
+        // Check if location ends with country name but no comma before it
+        if ( preg_match( '/\b' . preg_quote( $location_country, '/' ) . '\s*$/i', $location_display ) && strpos( $location_display, ',' ) === false ) {
+            // No comma found and ends with country, add comma before country
+            $location_display = preg_replace( '/\s+' . preg_quote( $location_country, '/' ) . '\s*$/i', ', ' . $location_country, $location_display );
+        }
+        // Now replace country with abbreviation
+        $location_display = str_ireplace( ', ' . $location_country, ', ' . $abbr_country, $location_display );
+        $location_display = str_ireplace( ' ' . $location_country, ', ' . $abbr_country, $location_display );
         $location_display = str_ireplace( $location_country, $abbr_country, $location_display );
-        // Also try common variations like "United States" -> "US"
-        $location_display = str_ireplace( ' United States', ', US', $location_display );
-        $location_display = str_ireplace( 'United States', 'US', $location_display );
-        $location_display = str_ireplace( ' USA', ', US', $location_display );
-        $location_display = str_ireplace( 'USA', 'US', $location_display );
+        // Also try common variations like "United States" -> "US"  
+        $location_display = preg_replace( '/\s+United States\b/i', ', US', $location_display );
+        $location_display = preg_replace( '/\bUnited States\b/i', 'US', $location_display );
+        $location_display = preg_replace( '/\s+USA\b/i', ', US', $location_display );
+        $location_display = preg_replace( '/\bUSA\b/i', 'US', $location_display );
+        // Clean up any double commas
+        $location_display = preg_replace( '/,\s*,/', ',', $location_display );
     } else {
         // If no separate country field, try to find and replace common country names in the string
+        // First, add comma before country if state and country are together without comma
+        // Pattern: "State Country" -> "State, Country"
+        $location_display = preg_replace( '/\s+(United States|USA|United States of America|United Kingdom|UK|Canada|Australia)\s*$/i', ', $1', $location_display );
+        // Then abbreviate countries
         $location_display = preg_replace( '/\bUnited States\b/i', 'US', $location_display );
         $location_display = preg_replace( '/\bUnited States of America\b/i', 'US', $location_display );
         $location_display = preg_replace( '/\bUSA\b/i', 'US', $location_display );
-        // Add comma before country abbreviation if not present
+        // Ensure comma before country abbreviation if not present (final check)
         $location_display = preg_replace( '/\s+US$/', ', US', $location_display );
         $location_display = preg_replace( '/\s+UK$/', ', UK', $location_display );
     }
@@ -270,6 +284,15 @@ if ( $location_custom ) {
         }
     }
     $location_display = implode( ', ', $location_parts );
+    // Ensure comma after state if we have state and country but no city
+    // This handles cases like "Florida United States" -> "Florida, US"
+    if ( $location_state && $location_country && ! $location_city ) {
+        $abbr_country = yacht_abbreviate_country( $location_country );
+        if ( ! empty( $abbr_country ) && strpos( $location_display, ',' ) === false ) {
+            // If no comma found, add one between state and country
+            $location_display = $location_state . ', ' . $abbr_country;
+        }
+    }
 }
 
 // Build category string
@@ -1338,16 +1361,17 @@ dl {
   font-size: 0.95rem;
 }
 
-dd {
+/* Generic dd styles - only apply outside yacht-spec-group */
+dl:not(.yacht-spec-group dl) dd {
   margin: 0 0 10px 220px;
   padding: 0px;
   border-bottom: 1px solid rgba(167, 167, 167, .2);
 }
 
 .yacht-spec-group dd {
-  margin: 0;
+  margin: 0 !important;
   padding: 0px;
-  border-bottom: 1px solid rgba(167, 167, 167, .2);
+  border-bottom: none !important;
   flex: 1;
   text-align: right;
   color: #333;
