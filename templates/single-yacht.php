@@ -90,6 +90,64 @@ function yacht_has_value( $value ) {
     return ! empty( $value ) && $value !== '0' && $value !== 0;
 }
 
+// Helper function to abbreviate country names
+function yacht_abbreviate_country( $country ) {
+    if ( empty( $country ) ) {
+        return '';
+    }
+    
+    // Common country abbreviations
+    $abbreviations = array(
+        'United States' => 'US',
+        'United States of America' => 'US',
+        'USA' => 'US',
+        'United Kingdom' => 'UK',
+        'Great Britain' => 'UK',
+        'Canada' => 'CA',
+        'Australia' => 'AU',
+        'France' => 'FR',
+        'Germany' => 'DE',
+        'Italy' => 'IT',
+        'Spain' => 'ES',
+        'Netherlands' => 'NL',
+        'Belgium' => 'BE',
+        'Switzerland' => 'CH',
+        'Sweden' => 'SE',
+        'Norway' => 'NO',
+        'Denmark' => 'DK',
+        'Finland' => 'FI',
+        'Greece' => 'GR',
+        'Portugal' => 'PT',
+        'Ireland' => 'IE',
+        'Monaco' => 'MC',
+        'Malta' => 'MT',
+        'Turkey' => 'TR',
+        'Croatia' => 'HR',
+        'Japan' => 'JP',
+        'China' => 'CN',
+        'Singapore' => 'SG',
+        'Hong Kong' => 'HK',
+        'New Zealand' => 'NZ',
+        'Mexico' => 'MX',
+        'Brazil' => 'BR',
+        'Argentina' => 'AR',
+        'South Africa' => 'ZA',
+        'United Arab Emirates' => 'AE',
+        'UAE' => 'AE',
+    );
+    
+    // Check if country matches a known abbreviation (case-insensitive)
+    $country_trimmed = trim( $country );
+    foreach ( $abbreviations as $full_name => $abbr ) {
+        if ( strcasecmp( $country_trimmed, $full_name ) === 0 ) {
+            return $abbr;
+        }
+    }
+    
+    // If no match found, return original country name
+    return $country;
+}
+
 // Collect all meta fields (assuming importer saved these)
 $year_built = yacht_meta( 'yacht_year', '' );
 $builder = yacht_meta( 'yacht_make', '' ); // or yacht_builder if you named it that
@@ -177,14 +235,26 @@ if ( $builder ) $yacht_title_parts[] = $builder;
 if ( $model ) $yacht_title_parts[] = $model;
 $yacht_title = ! empty( $yacht_title_parts ) ? implode( ' ', $yacht_title_parts ) : get_the_title();
 
-// Build location string (without country)
+// Build location string (with abbreviated country)
 $location_parts = array();
 if ( $location_custom ) {
+    // If using custom location, try to extract and abbreviate country if present
     $location_display = $location_custom;
+    // Check if custom location contains a country name we can abbreviate
+    if ( $location_country ) {
+        $abbr_country = yacht_abbreviate_country( $location_country );
+        // Replace full country name with abbreviation in custom location string
+        $location_display = str_ireplace( $location_country, $abbr_country, $location_display );
+    }
 } else {
     if ( $location_city ) $location_parts[] = $location_city;
     if ( $location_state ) $location_parts[] = $location_state;
-    // Country removed per user request
+    if ( $location_country ) {
+        $abbr_country = yacht_abbreviate_country( $location_country );
+        if ( ! empty( $abbr_country ) ) {
+            $location_parts[] = $abbr_country;
+        }
+    }
     $location_display = implode( ', ', $location_parts );
 }
 
@@ -356,7 +426,7 @@ if ( $price_on_application || empty( $asking_price ) ) {
   $has_description = ! empty( $post_content );
   $detailed_specs = yacht_meta( 'yacht_detailed_specifications', '' );
   $has_detailed_specs = ! empty( $detailed_specs );
-  $has_specs_content = $boat_name || $loa || $loa_feet || $loa_meters || $builder || $model || $year_built || $vessel_type || $category_display || $hull_material || $location_display || $asking_price_formatted || $beam || $gross_tonnage || $state_rooms || $heads || $sleeps || $berths || $engine_count || $engine_manufacturer || $engine_model || $engine_type || $engine_fuel_type || $engine_horsepower || $cruise_speed || $max_speed || $fuel_capacity || $water_capacity || $holding_tank;
+  $has_specs_content = $boat_name || $loa || $loa_feet || $loa_meters || $builder || $model || $year_built || $vessel_type || $hull_material || $beam || $gross_tonnage || $state_rooms || $heads || $sleeps || $berths || $engine_count || $engine_manufacturer || $engine_model || $engine_type || $engine_fuel_type || $engine_horsepower || $cruise_speed || $max_speed || $fuel_capacity || $water_capacity || $holding_tank;
   ?>
 
   <!-- Two-column layout wrapper -->
@@ -394,7 +464,7 @@ if ( $price_on_application || empty( $asking_price ) ) {
     <h2>Specifications</h2>
     <div class="yacht-specs-grid">
 
-      <?php if ( $boat_name || $loa || $loa_feet || $loa_meters || $builder || $model || $year_built || $vessel_type || $category_display || $hull_material || $location_display || $asking_price_formatted ) : ?>
+      <?php if ( $boat_name || $loa || $loa_feet || $loa_meters || $builder || $model || $year_built || $vessel_type || $hull_material ) : ?>
       <div class="yacht-spec-group">
         <h3>General</h3>
         <dl>
@@ -430,42 +500,6 @@ if ( $price_on_application || empty( $asking_price ) ) {
           <div>
             <dt>Vessel Type</dt>
             <dd><?php echo yacht_get_term_link( 'yacht_vessel_type', $vessel_type, $post_id ); ?></dd>
-          </div>
-          <?php endif; ?>
-          
-          <?php if ( $category_display ) : ?>
-          <div>
-            <dt>Category</dt>
-            <dd>
-              <?php
-              // Display category with links if multiple, or single link
-              if ( $main_category && $sub_category ) {
-                $main_link = yacht_get_term_link( 'yacht_category', $main_category, $post_id );
-                $sub_link = yacht_get_term_link( 'yacht_category', $sub_category, $post_id );
-                echo $main_link . ' / ' . $sub_link;
-              } elseif ( $main_category ) {
-                echo yacht_get_term_link( 'yacht_category', $main_category, $post_id );
-              } elseif ( $sub_category ) {
-                echo yacht_get_term_link( 'yacht_category', $sub_category, $post_id );
-              } else {
-                echo yacht_output( $category_display );
-              }
-              ?>
-            </dd>
-          </div>
-          <?php endif; ?>
-          
-          <?php if ( $location_display ) : ?>
-          <div>
-            <dt>Location</dt>
-            <dd><?php echo yacht_output( $location_display ); ?></dd>
-          </div>
-          <?php endif; ?>
-          
-          <?php if ( $asking_price_formatted && ! $price_on_application ) : ?>
-          <div>
-            <dt>Asking Price</dt>
-            <dd><?php echo yacht_output( $asking_price_formatted ); ?></dd>
           </div>
           <?php endif; ?>
         </dl>
@@ -765,8 +799,8 @@ if ( $price_on_application || empty( $asking_price ) ) {
 <style>
 .yacht-gallery-carousel-wrapper {
   position: relative;
-  padding: 20px 0 60px;
-  margin: 30px 0;
+  padding: 0px;
+  margin: 0px 0;
 }
 
 .yacht-gallery-carousel {
@@ -1012,10 +1046,11 @@ if ( $price_on_application || empty( $asking_price ) ) {
 .yacht-content-layout {
   max-width: 1200px;
   margin: 0 auto;
-  padding: 40px 20px;
+  padding: 0px 15px;
   display: flex;
   gap: 40px;
   align-items: flex-start;
+  box-sizing: border-box;
 }
 
 .yacht-content-main {
@@ -1240,7 +1275,7 @@ if ( $price_on_application || empty( $asking_price ) ) {
 
 .yacht-spec-group {
   border-bottom: 1px solid #e0e0e0;
-  padding-bottom: 20px;
+  padding-bottom: 0px;
 }
 
 .yacht-spec-group:last-child {
@@ -1253,12 +1288,19 @@ if ( $price_on_application || empty( $asking_price ) ) {
   font-weight: 600;
   color: #0073aa;
   margin-top: 0;
-  margin-bottom: 15px;
+  margin-bottom: 0px;
+}
+
+dl {
+  border: 0px double rgba(167, 167, 167, .3);
+  padding: 20px;
+  margin: 0 0 20px;
 }
 
 .yacht-spec-group dl {
-  margin: 0;
-  padding: 0;
+  border: 0px double rgba(167, 167, 167, .3);
+  padding: 20px;
+  margin: 0 0 20px;
 }
 
 .yacht-spec-group dl > div {
@@ -1282,8 +1324,16 @@ if ( $price_on_application || empty( $asking_price ) ) {
   font-size: 0.95rem;
 }
 
+dd {
+  margin: 0 0 10px 220px;
+  padding: 0px;
+  border-bottom: 1px solid rgba(167, 167, 167, .2);
+}
+
 .yacht-spec-group dd {
-  margin: 0;
+  margin: 0 0 10px 220px;
+  padding: 0px;
+  border-bottom: 1px solid rgba(167, 167, 167, .2);
   flex: 1;
   text-align: right;
   color: #333;
