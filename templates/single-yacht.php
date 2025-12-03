@@ -241,10 +241,24 @@ if ( $location_custom ) {
     // If using custom location, try to extract and abbreviate country if present
     $location_display = $location_custom;
     // Check if custom location contains a country name we can abbreviate
+    // First try to replace using the stored country field if available
     if ( $location_country ) {
         $abbr_country = yacht_abbreviate_country( $location_country );
         // Replace full country name with abbreviation in custom location string
         $location_display = str_ireplace( $location_country, $abbr_country, $location_display );
+        // Also try common variations like "United States" -> "US"
+        $location_display = str_ireplace( ' United States', ', US', $location_display );
+        $location_display = str_ireplace( 'United States', 'US', $location_display );
+        $location_display = str_ireplace( ' USA', ', US', $location_display );
+        $location_display = str_ireplace( 'USA', 'US', $location_display );
+    } else {
+        // If no separate country field, try to find and replace common country names in the string
+        $location_display = preg_replace( '/\bUnited States\b/i', 'US', $location_display );
+        $location_display = preg_replace( '/\bUnited States of America\b/i', 'US', $location_display );
+        $location_display = preg_replace( '/\bUSA\b/i', 'US', $location_display );
+        // Add comma before country abbreviation if not present
+        $location_display = preg_replace( '/\s+US$/', ', US', $location_display );
+        $location_display = preg_replace( '/\s+UK$/', ', UK', $location_display );
     }
 } else {
     if ( $location_city ) $location_parts[] = $location_city;
@@ -1308,7 +1322,7 @@ dl {
   justify-content: space-between;
   align-items: flex-start;
   padding: 8px 0;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid rgba(167, 167, 167, .2);
 }
 
 .yacht-spec-group dl > div:last-child {
@@ -1331,7 +1345,7 @@ dd {
 }
 
 .yacht-spec-group dd {
-  margin: 0 0 10px 220px;
+  margin: 0;
   padding: 0px;
   border-bottom: 1px solid rgba(167, 167, 167, .2);
   flex: 1;
