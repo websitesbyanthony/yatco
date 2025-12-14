@@ -18,8 +18,40 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 /**
+ * Get cache duration settings for API-only mode.
+ * 
+ * @return array Array with 'vessel_ids_duration' and 'vessel_data_duration' in seconds
+ */
+function yatco_api_only_get_cache_durations() {
+    $options = get_option( 'yatco_api_settings', array() );
+    
+    // Vessel ID list cache duration (default: 6 hours)
+    // This detects removed/sold vessels (they disappear from activevesselmlsid endpoint)
+    $vessel_ids_duration = isset( $options['yatco_api_only_ids_cache'] ) ? intval( $options['yatco_api_only_ids_cache'] ) : 21600; // 6 hours default
+    
+    // Individual vessel data cache duration (default: 1 hour)
+    // This detects price changes, days on market updates, status changes
+    $vessel_data_duration = isset( $options['yatco_api_only_data_cache'] ) ? intval( $options['yatco_api_only_data_cache'] ) : 3600; // 1 hour default
+    
+    return array(
+        'vessel_ids_duration' => $vessel_ids_duration,
+        'vessel_data_duration' => $vessel_data_duration,
+    );
+}
+
+/**
  * Get all active vessel IDs with caching.
- * Caches the ID list for 6 hours to avoid repeated API calls.
+ * 
+ * CHANGE DETECTION:
+ * - Removed/Sold vessels: Detected when they disappear from activevesselmlsid endpoint
+ * - New vessels: Detected when they appear in activevesselmlsid endpoint
+ * - Cache duration: Configurable (default 6 hours)
+ * 
+ * How it works:
+ * 1. Fetches list of active vessel IDs from YATCO API
+ * 2. If a vessel ID is missing from the list, it's been removed/sold
+ * 3. If a new vessel ID appears, it's a new listing
+ * 4. Caches the ID list to avoid repeated API calls
  * 
  * @param string $token API token
  * @return array|WP_Error Array of vessel IDs
@@ -33,35 +65,59 @@ function yatco_api_only_get_vessel_ids( $token ) {
     }
     
     // Fetch all vessel IDs (no limit)
+    // This endpoint only returns ACTIVE vessels, so removed/sold vessels won't appear
     $ids = yatco_get_active_vessel_ids( $token, 0 );
     
     if ( is_wp_error( $ids ) ) {
         return $ids;
     }
     
-    // Cache for 6 hours (21600 seconds)
-    set_transient( $cache_key, $ids, 21600 );
+    // Get cache duration from settings
+    $durations = yatco_api_only_get_cache_durations();
+    $cache_duration = $durations['vessel_ids_duration'];
+    
+    // Cache the ID list
+    set_transient( $cache_key, $ids, $cache_duration );
     
     return $ids;
 }
 
 /**
  * Get vessel data from API with short-term caching.
- * Caches individual vessel data for 1 hour to avoid repeated API calls.
+ * 
+ * CHANGE DETECTION:
+ * - Price changes: Detected when price fields change in API response
+ * - Days on market: Updated automatically (increments daily in API)
+ * - Status changes: Detected via StatusText field (e.g., "Sold", "Under Contract")
+ * - Sold status: Detected when StatusText contains "Sold" or vessel removed from active list
+ * - Other updates: All fields refreshed when cache expires
+ * 
+ * Cache duration: Configurable (default 1 hour)
+ * 
+ * How it works:
+ * 1. Checks cache first (if within cache duration, returns cached data)
+ * 2. If cache expired, fetches fresh data from API
+ * 3. API always returns latest data (price, days on market, status, etc.)
+ * 4. Caches the fresh data for the configured duration
  * 
  * @param string $token API token
  * @param int    $vessel_id Vessel ID
+ * @param bool   $force_refresh Force refresh even if cache exists
  * @return array|WP_Error Vessel data array
  */
-function yatco_api_only_get_vessel_data( $token, $vessel_id ) {
+function yatco_api_only_get_vessel_data( $token, $vessel_id, $force_refresh = false ) {
     $cache_key = 'yatco_api_only_vessel_' . $vessel_id;
-    $cached_data = get_transient( $cache_key );
     
-    if ( $cached_data !== false && is_array( $cached_data ) ) {
-        return $cached_data;
+    // Check cache unless forcing refresh
+    if ( ! $force_refresh ) {
+        $cached_data = get_transient( $cache_key );
+        
+        if ( $cached_data !== false && is_array( $cached_data ) ) {
+            return $cached_data;
+        }
     }
     
-    // Fetch full specs from API
+    // Fetch full specs from API (always gets latest data)
     $full = yatco_fetch_fullspecs( $token, $vessel_id );
     
     if ( is_wp_error( $full ) ) {
@@ -81,8 +137,12 @@ function yatco_api_only_get_vessel_data( $token, $vessel_id ) {
     // Build vessel data (same as yatco_import_single_vessel but without saving)
     $vessel_data = yatco_api_only_build_vessel_data( $vessel_id, $full, $result, $basic, $dims, $sections, $engines, $accommodations, $speed_weight, $hull_deck );
     
-    // Cache for 1 hour (3600 seconds)
-    set_transient( $cache_key, $vessel_data, 3600 );
+    // Get cache duration from settings
+    $durations = yatco_api_only_get_cache_durations();
+    $cache_duration = $durations['vessel_data_duration'];
+    
+    // Cache the fresh data
+    set_transient( $cache_key, $vessel_data, $cache_duration );
     
     return $vessel_data;
 }
@@ -461,7 +521,7 @@ function yatco_api_only_build_vessel_data( $vessel_id, $full, $result, $basic, $
 
 /**
  * Clear all API-only caches.
- * Useful for forcing fresh data.
+ * Useful for forcing fresh data immediately.
  */
 function yatco_api_only_clear_cache() {
     global $wpdb;
@@ -471,6 +531,104 @@ function yatco_api_only_clear_cache() {
         "DELETE FROM {$wpdb->options} 
          WHERE option_name LIKE '_transient_yatco_api_only_%' 
          OR option_name LIKE '_transient_timeout_yatco_api_only_%'"
+    );
+}
+
+/**
+ * Detect changes in vessel list (new/removed vessels).
+ * Compares current vessel IDs with cached list.
+ * 
+ * @param string $token API token
+ * @return array Array with 'added', 'removed', 'total' keys
+ */
+function yatco_api_only_detect_vessel_changes( $token ) {
+    // Get current vessel IDs (may fetch from API if cache expired)
+    $current_ids = yatco_api_only_get_vessel_ids( $token );
+    
+    if ( is_wp_error( $current_ids ) ) {
+        return $current_ids;
+    }
+    
+    // Get last known vessel IDs from a separate cache
+    $last_ids_key = 'yatco_api_only_last_vessel_ids';
+    $last_ids = get_transient( $last_ids_key );
+    
+    if ( $last_ids === false || ! is_array( $last_ids ) ) {
+        // First run - save current IDs as baseline
+        set_transient( $last_ids_key, $current_ids, 86400 ); // Keep for 24 hours
+        return array(
+            'added' => count( $current_ids ),
+            'removed' => 0,
+            'total' => count( $current_ids ),
+            'message' => 'First check - all vessels marked as new',
+        );
+    }
+    
+    // Compare lists
+    $current_ids_sorted = array_unique( array_map( 'intval', $current_ids ) );
+    $last_ids_sorted = array_unique( array_map( 'intval', $last_ids ) );
+    sort( $current_ids_sorted );
+    sort( $last_ids_sorted );
+    
+    $added = array_diff( $current_ids_sorted, $last_ids_sorted );
+    $removed = array_diff( $last_ids_sorted, $current_ids_sorted );
+    
+    // Update last known IDs
+    set_transient( $last_ids_key, $current_ids, 86400 );
+    
+    return array(
+        'added' => count( $added ),
+        'removed' => count( $removed ),
+        'total' => count( $current_ids_sorted ),
+        'added_ids' => array_values( $added ),
+        'removed_ids' => array_values( $removed ),
+    );
+}
+
+/**
+ * Check if a vessel is sold or removed.
+ * 
+ * @param string $token API token
+ * @param int    $vessel_id Vessel ID to check
+ * @return array|WP_Error Array with 'is_active', 'is_sold', 'status' keys
+ */
+function yatco_api_only_check_vessel_status( $token, $vessel_id ) {
+    // Get current active vessel IDs
+    $active_ids = yatco_api_only_get_vessel_ids( $token );
+    
+    if ( is_wp_error( $active_ids ) ) {
+        return $active_ids;
+    }
+    
+    $is_active = in_array( intval( $vessel_id ), array_map( 'intval', $active_ids ) );
+    
+    if ( ! $is_active ) {
+        // Vessel not in active list - could be sold or removed
+        return array(
+            'is_active' => false,
+            'is_sold' => true, // Assume sold if not in active list
+            'status' => 'removed_or_sold',
+            'message' => 'Vessel is not in active listings (may be sold or removed)',
+        );
+    }
+    
+    // Vessel is active - check status from API
+    $vessel_data = yatco_api_only_get_vessel_data( $token, $vessel_id );
+    
+    if ( is_wp_error( $vessel_data ) ) {
+        return $vessel_data;
+    }
+    
+    $status_text = isset( $vessel_data['status_text'] ) ? strtolower( $vessel_data['status_text'] ) : '';
+    $is_sold = ( strpos( $status_text, 'sold' ) !== false ) || ( strpos( $status_text, 'under contract' ) !== false );
+    
+    return array(
+        'is_active' => true,
+        'is_sold' => $is_sold,
+        'status' => $vessel_data['status_text'] ? $vessel_data['status_text'] : 'active',
+        'status_text' => $vessel_data['status_text'],
+        'days_on_market' => isset( $vessel_data['days_on_market'] ) ? $vessel_data['days_on_market'] : 0,
+        'price_usd' => isset( $vessel_data['price_usd'] ) ? $vessel_data['price_usd'] : null,
     );
 }
 
